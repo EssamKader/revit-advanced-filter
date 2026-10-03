@@ -52,6 +52,17 @@ class FakeElementType(object):  # system family type: no .Family
         self.Name = name
 
 
+class FakeXYZ(object):
+    def __init__(self, x, y, z):
+        self.X, self.Y, self.Z = x, y, z
+
+
+class FakeBBox(object):
+    def __init__(self, mn=(0, 0, 0), mx=(1, 1, 1)):
+        self.Min = FakeXYZ(*mn)
+        self.Max = FakeXYZ(*mx)
+
+
 class FakeElement(object):
     def __init__(self, eid, category, etype=None, bbox=True):
         self.bbox_calls = 0
@@ -65,7 +76,9 @@ class FakeElement(object):
 
     def get_BoundingBox(self, view):
         self.bbox_calls += 1
-        return object() if self._bbox else None
+        if self._bbox is True:
+            return FakeBBox()
+        return self._bbox or None
 
 
 class FakeViewElement(FakeElement):  # stands in for DB.View subclasses
@@ -277,6 +290,34 @@ class ExclusionTests(unittest.TestCase):
         self.assertEqual(keep.bbox_calls, 1)
 
 
+class DegenerateBBoxTests(unittest.TestCase):
+    MM = 1.0 / 304.8
+
+    def kept(self, bb):
+        return kept_ids([FakeElement(1, cat("Railings", -2000126), WALL_T,
+                                     bbox=bb)]) == [1]
+
+    def test_helper(self):
+        self.assertTrue(ra.is_degenerate_bbox(FakeBBox((0, -1, 0), (0, -1, 0))))
+        self.assertFalse(ra.is_degenerate_bbox(FakeBBox((0, 0, 0), (5, 0, 0))))
+        self.assertTrue(ra.is_degenerate_bbox(
+            FakeBBox((0, 0, 0), (1, 1, 1)), tol=2.0))
+
+    def test_point_bbox_excluded(self):
+        self.assertFalse(self.kept(FakeBBox((0, -0.164, 0), (0, -0.164, 0))))
+
+    def test_thin_real_bbox_kept(self):
+        t = 5 * self.MM  # 5 mm in one axis only
+        self.assertTrue(self.kept(FakeBBox((0, 0, 0), (0, 0, t))))
+        self.assertTrue(self.kept(FakeBBox((0, 0, 0), (10, 10, t))))
+
+    def test_normal_bbox_kept(self):
+        self.assertTrue(self.kept(FakeBBox()))
+
+    def test_none_bbox_excluded(self):
+        self.assertFalse(self.kept(None))
+
+
 class FakeLevel(object):
     def __init__(self, lid, name, elevation):
         self.Id = FakeId(lid)
@@ -303,10 +344,23 @@ class FakeLeveled(FakeElement):
         return self._params.get(key)
 
 
+KEYS = ["INST_REF", "RBS_START", "FAMILY_LVL", "SCHED_LVL", "STAIRS_BASE"]
+
+
+def eid_param(value):
+    return FakeParam("ElementId", FakeId(value))
+
+
 L1 = FakeLevel(10, "Level 1", 0.0)
 L2 = FakeLevel(11, "Level 2", 13.12)
 ELEMENTS = {10: L1, 11: L2, 500: WALL_T}
-KEYS = ["INST_REF", "RBS_START", "FAMILY_LVL", "SCHED_LVL", "STAIRS_BASE"]
+ELEMENTS.update({
+    700: FakeLeveled(700, WALLS, FakeId(11)),                    # floor
+    701: FakeLeveled(701, WALLS, None, {KEYS[4]: eid_param(10)}),  # stair
+    702: FakeLeveled(702, WALLS),                                # no level
+    703: FakeLeveled(703, WALLS),                                # has a host
+})
+ELEMENTS[703].HostId = FakeId(700)
 
 
 def make_resolver(calls=None):
@@ -315,10 +369,6 @@ def make_resolver(calls=None):
             calls.append(eid.IntegerValue)
         return ELEMENTS.get(eid.IntegerValue)
     return ra.LevelResolver(get_element, KEYS)
-
-
-def eid_param(value):
-    return FakeParam("ElementId", FakeId(value))
 
 
 class LevelResolutionTests(unittest.TestCase):
@@ -350,6 +400,43 @@ class LevelResolutionTests(unittest.TestCase):
     def test_missing_element_falls_through(self):
         el = FakeLeveled(1, WALLS, FakeId(999), {KEYS[1]: eid_param(10)})
         self.assertEqual(self.name(el), "Level 1")
+
+    def railing(self, host):
+        el = FakeLeveled(1, WALLS)
+        el.HostId = FakeId(host) if host is not None else INVALID
+        return el
+
+    def test_host_level_fallback(self):
+        self.assertEqual(self.name(self.railing(700)), "Level 2")  # floor
+        self.assertEqual(self.name(self.railing(701)), "Level 1")  # stair param
+
+    def test_host_without_level_or_invalid_host_is_none(self):
+        self.assertIsNone(self.name(self.railing(702)))
+        self.assertIsNone(self.name(self.railing(999)))  # unresolvable
+        self.assertIsNone(self.name(self.railing(None)))
+        self.assertIsNone(self.name(FakeLeveled(1, WALLS)))  # no HostId attr
+
+    def test_own_level_beats_host(self):
+        el = self.railing(700)
+        el.LevelId = FakeId(10)
+        self.assertEqual(self.name(el), "Level 1")
+
+    def test_host_depth_one_no_chaining(self):
+        self.assertIsNone(self.name(self.railing(703)))  # 703 -> 700 not followed
+        loop = FakeLeveled(704, WALLS)
+        loop.HostId = FakeId(704)
+        ELEMENTS[704] = loop
+        try:
+            self.assertIsNone(self.name(self.railing(704)))
+        finally:
+            del ELEMENTS[704]
+
+    def test_host_cached(self):
+        calls = []
+        r = make_resolver(calls)
+        for _ in range(3):
+            self.assertEqual(r.level_name(self.railing(700)), "Level 2")
+        self.assertEqual(calls, [700, 11])
 
     def test_param_rules(self):
         cases = [
