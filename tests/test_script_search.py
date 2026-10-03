@@ -41,6 +41,12 @@ class FakeCheckBox(object):
         self.Unchecked = Evt()
 
 
+class FakeRadio(object):
+    def __init__(self, checked):
+        self.IsChecked = checked
+        self.Checked = Evt()
+
+
 class FakeItems(list):
     def Add(self, x):
         self.append(x)
@@ -133,6 +139,8 @@ class FakeWPFWindow(object):
         self.level_list = types.SimpleNamespace(Items=FakeItems())
         self.all_levels = types.SimpleNamespace(
             IsChecked=True, Checked=Evt(), Unchecked=Evt())
+        self.scope_project = FakeRadio(True)
+        self.scope_view = FakeRadio(False)
         self.search_box = FakeTextBox()
         self.search_hint = FakeBlock()
         self.status_text = types.SimpleNamespace(Text="", Foreground=None)

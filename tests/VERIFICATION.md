@@ -255,3 +255,18 @@ Live read-only C# probe on 2024-STR-R24-KYN-VILLA (2026-10-03), rule re-run: 950
 | Walls | 88 |
 
 No `.dwg` categories and no Lines remain.
+
+## #23 Scope toggle (US-12)
+
+Pure (`tests/test_scope.py`, `ScopePureTests`): `filter_by_scope` (project keeps all, view keeps only ids in the set, empty view), composition with `filter_by_levels` (scope first), level list scoped via `ordered_levels` on the scoped records, `merge_level_selection` on scope change, `parse_scope` (bad input gives project).
+
+Script-level (`ScopeScriptTests`, mock harness from `test_script_modeless.py`; the fake window gained `scope_project` / `scope_view` radios): toggle rebuilds levels and tree and keeps search text and checked paths (including a hidden checked leaf across a round trip); saved scope restored on open; save on toggle; bad or failing config never raises; ViewActivated in view scope rebuilds levels and tree for the new view and restores remembered checks; project scope only updates M (same tree objects); Refresh re-applies the scope; unsupported view (isolate problem or collector failure) shows an empty tree and "Active view does not support element filtering", which clears when leaving the view or switching to project scope.
+
+Decision on actions: Isolate, Colour and Reset do not rebuild the tree. A temporary isolate makes the view report only the isolated set, so rebuilding would shrink the tree right after the click. The window keeps `_scope_ids` (what the tree was built for), moved only by open, ViewActivated, Refresh; `_view_ids` (M) is still refreshed by actions from the pre-isolate ids. Tests: `test_action_updates_m_but_not_tree`, `test_rebuild_after_action_uses_built_view_not_isolated_set`. Consequence: toggling to Active view only uses the ids of the last ViewActivated, not a re-query.
+
+Live-only (verify in #7):
+- RadioButton dark style and layout above the Levels header; GroupName exclusivity; saved scope restored in a fresh Revit session.
+- `RadioButton.Checked` firing once on a user click and not during `IsChecked` assignment in the constructor (handlers are attached after the initial state is set).
+- Active view only follows real view switches including sheets and schedules, and returns to a tree when going back to a plan.
+- Level list rendering after a rebuild on view switch; cost of rebuilding a large tree on each switch.
+

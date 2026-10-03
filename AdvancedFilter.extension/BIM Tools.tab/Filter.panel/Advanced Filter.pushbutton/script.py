@@ -32,6 +32,9 @@ def set_open_window(window):
     System.AppDomain.CurrentDomain.SetData(_SLOT_KEY, window)
 
 
+NO_FILTER_HINT = "Active view does not support element filtering"
+
+
 def doc_key_of(document):
     """(PathName, Title) of a document, or None if it cannot be read."""
     try:
@@ -81,6 +84,23 @@ def save_colour_state(rgb, custom_colors):
         pass
 
 
+def load_scope():
+    """Saved scope from the pyRevit config; whole project when missing or bad."""
+    try:
+        return core.parse_scope(getattr(script.get_config(), "scope", None))
+    except Exception:
+        return core.SCOPE_PROJECT
+
+
+def save_scope(scope):
+    try:
+        cfg = script.get_config()
+        cfg.scope = scope
+        script.save_config()
+    except Exception:
+        pass
+
+
 class FilterWindow(forms.WPFWindow):
     def __init__(self, xaml_file, records, elevations, document=None):
         forms.WPFWindow.__init__(self, xaml_file)
@@ -88,7 +108,13 @@ class FilterWindow(forms.WPFWindow):
         self._doc_key = doc_key_of(document) if document is not None else None
         self._closed = False
         self._records = records
+        self._elevations = elevations
         self._view_ids = set(r.element_id for r in records if r.in_active_view)
+        # Ids the tree was last scoped to: moved only by build points (open,
+        # view switch, Refresh), never by Isolate/colour actions.
+        self._scope_ids = set(self._view_ids)
+        self._view_unsupported = False
+        self._scope = load_scope()
         self._roots = []
         self._checked = set()  # remembered check paths, incl. hidden nodes
         self._busy = False
@@ -104,7 +130,12 @@ class FilterWindow(forms.WPFWindow):
         self._fg_brush = SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6))
         self._muted_brush = SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80))
         self._level_boxes = []
-        self._build_levels(core.ordered_levels(records, elevations), None)
+        self.scope_view.IsChecked = self._scope == core.SCOPE_VIEW
+        self.scope_project.IsChecked = self._scope != core.SCOPE_VIEW
+        self._build_levels(
+            core.ordered_levels(self._scoped_records(), elevations), None)
+        self.scope_project.Checked += self._on_scope_changed
+        self.scope_view.Checked += self._on_scope_changed
         self.all_levels.Checked += self._on_all_toggle
         self.all_levels.Unchecked += self._on_all_toggle
         self._rebuild()
@@ -134,6 +165,32 @@ class FilterWindow(forms.WPFWindow):
         finally:
             self._busy = False
 
+    def _scoped_records(self):
+        """Records inside the scope; none in view scope on an unsupported view."""
+        if self._scope == core.SCOPE_VIEW and self._view_unsupported:
+            return []
+        return core.filter_by_scope(self._records, self._scope, self._scope_ids)
+
+    def _reapply_scope(self):
+        """Rebuild level list (scoped levels only) and tree; keep checks/search."""
+        old_all = [b.Content for b in self._level_boxes]
+        old_selected = self._selected_levels()
+        names = core.ordered_levels(self._scoped_records(), self._elevations)
+        self._build_levels(
+            names, session.merge_level_selection(old_selected, old_all, names))
+        self._rebuild()
+
+    def _on_scope_changed(self, sender, args):
+        if self._busy:
+            return
+        scope = (core.SCOPE_VIEW if self.scope_view.IsChecked
+                 else core.SCOPE_PROJECT)
+        if scope == self._scope:
+            return
+        self._scope = scope
+        save_scope(scope)
+        self._reapply_scope()
+
     def _selected_levels(self):
         return [b.Content for b in self._level_boxes if b.IsChecked]
 
@@ -142,7 +199,7 @@ class FilterWindow(forms.WPFWindow):
         self._checked = core.merge_checked_paths(self._checked, self._roots)
         selected = self._selected_levels()
         if selected:
-            records = core.filter_by_levels(self._records, selected)
+            records = core.filter_by_levels(self._scoped_records(), selected)
         else:
             records = []  # no level ticked: empty tree (empty selection = all in core)
         self._roots = core.build_tree(records)
@@ -273,7 +330,11 @@ class FilterWindow(forms.WPFWindow):
     def _update_status(self):
         """Refresh the N/M label and Isolate enabled state (call after any check change)."""
         n, m = core.selection_counts(self._roots, self._view_ids)
-        if n == 0:
+        if self._scope == core.SCOPE_VIEW and self._view_unsupported:
+            m = 0
+            self.status_text.Text = NO_FILTER_HINT
+            self.status_text.Foreground = self._muted_brush
+        elif n == 0:
             self.status_text.Text = "Nothing selected"
             self.status_text.Foreground = self._muted_brush
         else:
@@ -389,18 +450,16 @@ class FilterWindow(forms.WPFWindow):
             r.in_active_view = r.element_id in self._view_ids
         self._update_status()
 
-    def apply_refresh(self, document, records, elevations):
+    def apply_refresh(self, document, records, elevations, unsupported=False):
         """Rebind to document/records; keep levels, search text and checks."""
-        old_all = [b.Content for b in self._level_boxes]
-        old_selected = self._selected_levels()
         self._doc = document
         self._doc_key = doc_key_of(document)
         self._records = records
+        self._elevations = elevations
         self._view_ids = set(r.element_id for r in records if r.in_active_view)
-        names = core.ordered_levels(records, elevations)
-        self._build_levels(
-            names, session.merge_level_selection(old_selected, old_all, names))
-        self._rebuild()
+        self._scope_ids = set(self._view_ids)
+        self._view_unsupported = unsupported
+        self._reapply_scope()
 
     def _on_view_activated(self, sender, args):
         """ViewActivated runs in API context; never let an exception escape."""
@@ -410,11 +469,21 @@ class FilterWindow(forms.WPFWindow):
             document = args.Document
             if doc_key_of(document) != self._doc_key:
                 return
+            view = args.CurrentActiveView
             try:
-                ids = revit_adapter.active_view_ids(document, args.CurrentActiveView)
+                unsupported = revit_adapter.view_isolate_problem(view) is not None
+            except Exception:
+                unsupported = True
+            try:
+                ids = revit_adapter.active_view_ids(document, view)
             except Exception:
                 ids = set()  # e.g. a view the collector cannot filter
+                unsupported = True
+            self._view_unsupported = unsupported
+            self._scope_ids = set(ids)
             self.set_view_ids(ids)
+            if self._scope == core.SCOPE_VIEW:
+                self._reapply_scope()  # tree and levels follow the new view
         except Exception:
             pass
 
@@ -588,7 +657,9 @@ def process_request(uiapp, window, request):
             forms.alert("No model elements found in this project.",
                         title="Advanced Filter")
             return
-        window.apply_refresh(doc, records, elevations)
+        window.apply_refresh(
+            doc, records, elevations,
+            revit_adapter.view_isolate_problem(view) is not None)
         window.show_status("Refreshed: %d elements" % len(records))
         return
 
