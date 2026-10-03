@@ -236,3 +236,22 @@ Live-only (verify in #7):
 - Document guard with two open projects; Refresh after model edits and after switching documents; level list rebuild rendering.
 - WPF rendering of the new Refresh button and the Close button.
 - Colour and Reset do not leave temporary isolate: in a temporarily isolated view they act only on the visible elements (the rebuilt view id set), by design.
+
+## #22 Exclude non-building elements
+
+Mock tests (`tests/test_revit_adapter.py`, `ExclusionTests`): ImportInstance with a `.dwg`-named non-BIC category, RevitLinkInstance, PointCloudInstance, view-specific DetailLine in Lines, element with only `OwnerViewId` valid, model line in OST_Lines, Room, Area, MEP Space and HVAC Zone are dropped; Floor, Wall, column, Stairs, Railing, Ramp (plain Element), Structural Foundation and elements with `ViewSpecific=False` / `OwnerViewId=-1` are kept. Ordering: a fake counts `get_BoundingBox` calls; it is 0 for excluded class, null/annotation/sub category, excluded category id, ViewSpecific and OwnerViewId elements, and 1 for a kept element. `view_class` was generalised to `excluded_classes` (tuple); `collect_records` builds it with `excluded_class_tuple()` (getattr, missing names skipped).
+
+Live read-only C# probe on 2024-STR-R24-KYN-VILLA (2026-10-03), rule re-run: 9504 instances scanned, 553 kept. BuiltInCategory ints: Lines -2000051, Rooms -2000160, Areas -2003200, MEPSpaces -2003600, HVAC_Zones -2008107, Cameras -2000500 (all exist).
+
+| Category | Count |
+|---|---|
+| Floors | 63 |
+| Railings | 1 |
+| Ramps | 1 |
+| Stairs | 5 |
+| Structural Columns | 150 |
+| Structural Foundations | 24 |
+| Structural Framing | 221 |
+| Walls | 88 |
+
+No `.dwg` categories and no Lines remain.
