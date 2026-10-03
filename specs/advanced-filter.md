@@ -101,13 +101,43 @@ As a BIM engineer, I want to limit the tree to elements on chosen levels (one, s
   - Isolate uses only elements on the selected levels. N/M counts (US-6) and search (US-4) apply to the level-filtered tree.
   - Level resolution goes through mock tests, and the pure filtering lives in `core.py`.
 
+### US-10 — Colour override
+As a BIM engineer, I want to colour the checked elements in the active view, and to remove that colour again, so that I can highlight a category, family or type without isolating it.
+
+Decisions (user, 2026-10-03):
+
+| Topic | Decision |
+|---|---|
+| Trigger | Separate action, independent of Isolate |
+| Graphics | Surface and cut foreground set to `<Solid fill>`, plus projection and cut line colour, all in the chosen colour |
+| Removal | **Reset colours** button, plus Ctrl+Z (one transaction per action) |
+| Picker | Windows `System.Windows.Forms.ColorDialog` with custom colours |
+
+- **Acceptance:**
+  - **Colour override checkbox:** ticking it opens the colour dialog right away.
+    - Cancelling the dialog leaves the box unticked.
+    - Once a colour is chosen, a clickable swatch next to the box shows it; clicking the swatch reopens the dialog.
+    - Unticking the box hides the swatch, but the colour is remembered for the session.
+  - **Apply colour button:**
+    - Enabled only when the box is ticked and M > 0, i.e. checked elements exist in the active view.
+    - Applies `OverrideGraphicSettings` to the checked ids in the active view, inside one Transaction "Advanced Filter: Colour override", then closes the dialog.
+    - Shows the N > M notice (US-6) when some matches aren't in the view.
+  - **Reset colours button:**
+    - Enabled when M > 0.
+    - Calls `SetElementOverrides(id, OverrideGraphicSettings())` for the checked ids in the active view, inside one Transaction "Advanced Filter: Reset colours", then closes the dialog.
+    - It only clears per-element overrides. View filters and category overrides are untouched.
+  - **Solid fill:** found via `FillPatternElement` where `GetFillPattern().IsSolidFill` is true and the target is Drafting. If none is found, show a clear error and roll back.
+  - **Colour conversion:** the chosen colour (WinForms `Color`) is converted to `DB.Color(r, g, b)`. The conversion and the override plan (which setters get which values) live in pure, mock-tested code.
+  - **Errors:** exceptions roll back the transaction and show an alert, consistent with US-7.
+  - **Isolate unchanged:** Isolate behaves exactly as before. Colour and Isolate are separate actions.
+
 ## Out of scope
 - Parameter-value filters
 - Linked models
 - Element types
 - Annotation categories
 - Permanent hide/isolate
-- Select/color/export actions
+- Select/export actions (colour override added as US-10)
 - Dockable pane
 - Saved filter presets
 
