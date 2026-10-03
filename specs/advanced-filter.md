@@ -16,6 +16,8 @@ nodes and clicks **Isolate** to temporarily isolate the matching elements in the
 | Filter depth | Category → Family → Type only (no parameter rules) |
 | UI | Modal WPF dialog (pyRevit `forms.WPFWindow` + XAML) |
 | Excluded | Element types, views, annotation categories, linked models, permanent isolate |
+| Geometric only (2026-10-03) | Keep an element only if its category is top-level Model, it is not a `View`, and `get_BoundingBox(None)` is not None. This drops Materials, Sun Path, Project Information, camera views and unplaced rooms. |
+| Level filter (2026-10-03) | Multi-select level checklist. Each element belongs to **one** level, its base/reference level; spanning levels doesn't count. Elements with no level go to `<No Level>`. |
 
 ## User stories
 
@@ -82,6 +84,22 @@ with mock elements outside Revit (CONTEXT.md rule).
     - search ancestor/descendant visibility
     - N/M counts
   - The suite runs under CPython 3 and is IronPython-2.7 compatible: no f-strings and no type hints in `lib/`.
+
+### US-9 — Level filter
+As a BIM engineer, I want to limit the tree to elements on chosen levels (one, several, or all), so that I can isolate what is on a specific floor.
+- **Acceptance:**
+  - Each record gets one level name, resolved in this order:
+    1. `Element.LevelId`
+    2. `INSTANCE_REFERENCE_LEVEL_PARAM` (beams/framing)
+    3. `RBS_START_LEVEL_PARAM` (MEP curves)
+    4. `FAMILY_LEVEL_PARAM` / `SCHEDULE_LEVEL_PARAM`
+    5. `STAIRS_BASE_LEVEL_PARAM`
+    6. otherwise `<No Level>`.
+  - Live check (2026-10-03): walls, floors and columns resolve through `LevelId`, and framing through `INSTANCE_REFERENCE_LEVEL_PARAM`.
+  - The dialog has a multi-select level checklist with an **All levels** toggle. Levels are sorted by elevation, with `<No Level>` last. The default is All.
+  - Changing the level selection rebuilds the tree and its counts from the matching records only. Check states are preserved for nodes that still exist, by Category/Family/Type path.
+  - Isolate uses only elements on the selected levels. N/M counts (US-6) and search (US-4) apply to the level-filtered tree.
+  - Level resolution goes through mock tests, and the pure filtering lives in `core.py`.
 
 ## Out of scope
 - Parameter-value filters
