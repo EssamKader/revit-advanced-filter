@@ -63,6 +63,10 @@ class FakeTimer(object):
     def Stop(self):
         self.running = False
 
+    @property
+    def IsEnabled(self):
+        return self.running
+
 
 class FakeTextBox(object):
     def __init__(self):

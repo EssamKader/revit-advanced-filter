@@ -162,6 +162,15 @@ def set_checked(node, value, visible=None):
         leaf._checked = bool(value)
 
 
+def set_all(roots, value, visible=None):
+    """Select all / Clear: apply set_checked to every root.
+
+    With visible given (active search), hidden leaves keep their state.
+    """
+    for root in roots:
+        set_checked(root, value, visible)
+
+
 def click_target(node, visible=None):
     """Value a user click should apply: not-all-checked -> True, else False.
 

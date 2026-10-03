@@ -11,7 +11,7 @@ from advfilter.core import (  # noqa: E402
     ElementRecord, build_tree, iter_element_ids, NO_FAMILY, NO_TYPE, NO_LEVEL,
     filter_by_levels, ordered_levels, checked_paths, apply_checked_paths,
     checked_element_ids, merge_checked_paths, set_checked, click_target,
-    search_visibility)
+    search_visibility, set_all as core_set_all)
 
 
 def rec(eid, cat, fam, typ, in_view=True):
@@ -525,6 +525,43 @@ class SearchTests(unittest.TestCase):
         set_checked(self.walls, True, None)
         self.assertIs(self.walls.state, True)
         self.assertIs(click_target(self.walls, None), False)
+
+
+class SetAllTests(unittest.TestCase):
+    def setUp(self):
+        self.tree = build_tree([
+            rec(1, "Walls", "Basic Wall", "Generic 200"),
+            rec(2, "Walls", "Basic Wall", "Generic 300"),
+            rec(3, "Doors", "Single Flush", "0915 x 2134"),
+        ])
+        self.doors, self.walls = self.tree
+
+    def test_select_all_and_clear_without_search(self):
+        core_set_all(self.tree, True)
+        self.assertIs(self.doors.state, True)
+        self.assertIs(self.walls.state, True)
+        core_set_all(self.tree, False)
+        self.assertIs(self.doors.state, False)
+        self.assertIs(self.walls.state, False)
+
+    def test_select_all_under_search_touches_only_visible(self):
+        vis = search_visibility(self.tree, "200")
+        core_set_all(self.tree, True, vis)
+        self.assertIs(self.doors.state, False)
+        self.assertIs(self.walls.state, None)
+        g200, g300 = self.walls.children[0].children
+        self.assertIs(g200.state, True)
+        self.assertIs(g300.state, False)
+
+    def test_clear_under_search_keeps_hidden_checked(self):
+        core_set_all(self.tree, True)
+        vis = search_visibility(self.tree, "door")
+        core_set_all(self.tree, False, vis)
+        self.assertIs(self.doors.state, False)
+        self.assertIs(self.walls.state, True)
+
+    def test_empty_roots(self):
+        core_set_all([], True)
 
 
 if __name__ == "__main__":
