@@ -24,8 +24,10 @@ INVALID = FakeId(-1)
 
 
 class FakeCategory(object):
-    def __init__(self, name, ctype=MODEL, parent=None):
+    def __init__(self, name, ctype=MODEL, parent=None, cid=None):
         self.Name = name
+        if cid is not None:
+            self.Id = FakeId(cid)
         self.CategoryType = ctype
         self.Parent = parent
 
@@ -52,6 +54,7 @@ class FakeElementType(object):  # system family type: no .Family
 
 class FakeElement(object):
     def __init__(self, eid, category, etype=None, bbox=True):
+        self.bbox_calls = 0
         self.Id = FakeId(eid)
         self.Category = category
         self._type = etype
@@ -61,11 +64,32 @@ class FakeElement(object):
         return self._type.Id if self._type is not None else INVALID
 
     def get_BoundingBox(self, view):
+        self.bbox_calls += 1
         return object() if self._bbox else None
 
 
 class FakeViewElement(FakeElement):  # stands in for DB.View subclasses
     pass
+
+
+class FakeImportInstance(FakeElement):
+    pass
+
+
+class FakeLinkInstance(FakeElement):
+    pass
+
+
+class FakePointCloud(FakeElement):
+    pass
+
+
+class FakeDetailLine(FakeElement):
+    ViewSpecific = True
+
+
+class FakeOwned(FakeElement):  # OwnerViewId only, ViewSpecific absent
+    OwnerViewId = FakeId(555)
 
 
 class FakeView(object):
@@ -146,11 +170,11 @@ class MappingTests(unittest.TestCase):
         cam = FakeElement(352540, cam_cat, bbox=True)  # plain Element, not a View
         recs = ra.records_from_elements(
             [cam, FakeElement(2, WALLS, WALL_T)], get_type, MODEL,
-            view_class=FakeViewElement, excluded_category_ids=set([-2000500]))
+            excluded_classes=(FakeViewElement,), excluded_category_ids=set([-2000500]))
         self.assertEqual([r.element_id for r in recs], [2])
         # without the exclusion the camera leaks (the bug being fixed)
         self.assertEqual(len(ra.records_from_elements(
-            [cam], get_type, MODEL, view_class=FakeViewElement)), 1)
+            [cam], get_type, MODEL, excluded_classes=(FakeViewElement,))), 1)
 
     def test_view_check_skipped_when_no_view_class(self):
         self.assertTrue(ra.is_model_element(
@@ -184,6 +208,73 @@ class MappingTests(unittest.TestCase):
         tree = build_tree(records(els))
         self.assertEqual([(n.name, n.count) for n in tree],
                          [("Doors", 1), ("Walls", 2)])
+
+
+EXCLUDED = (FakeViewElement, FakeImportInstance, FakeLinkInstance, FakePointCloud)
+NON_PHYS_IDS = set([-2000051, -2000160, -2003200, -2003600, -2008107, -2000500])
+
+
+def cat(name, cid):
+    return FakeCategory(name, cid=cid)
+
+
+def kept_ids(elements):
+    return [r.element_id for r in ra.records_from_elements(
+        elements, get_type, MODEL, excluded_classes=EXCLUDED,
+        excluded_category_ids=NON_PHYS_IDS)]
+
+
+class ExclusionTests(unittest.TestCase):
+    def test_excluded_cases_dropped(self):
+        wall = FakeElement(1, cat("Walls", -2000011), WALL_T)
+        bad = [
+            FakeImportInstance(10, cat("01- Basment Floor.dwg", 900001)),
+            FakeLinkInstance(11, cat("RVT Links", -2001352)),
+            FakePointCloud(12, cat("Point Clouds", -2001360)),
+            FakeDetailLine(13, cat("Lines", -2000051)),
+            FakeOwned(14, cat("Generic Annotations2", 77)),
+            FakeElement(15, cat("Lines", -2000051)),       # model line
+            FakeElement(16, cat("Rooms", -2000160)),
+            FakeElement(17, cat("Areas", -2003200)),
+            FakeElement(18, cat("MEP Spaces", -2003600)),
+            FakeElement(19, cat("HVAC Zones", -2008107)),
+        ]
+        self.assertEqual(kept_ids([wall] + bad), [1])
+
+    def test_real_building_elements_kept(self):
+        els = [
+            FakeElement(1, cat("Floors", -2000032), WALL_T),
+            FakeElement(2, cat("Walls", -2000011), WALL_T),
+            FakeElement(3, cat("Structural Columns", -2001330), DOOR_T),
+            FakeElement(4, cat("Stairs", -2000120), WALL_T),
+            FakeElement(5, cat("Railings", -2000126), WALL_T),
+            FakeElement(6, cat("Ramps", -2000180), WALL_T),   # plain Element
+            FakeElement(7, cat("Structural Foundations", -2001300), WALL_T),
+        ]
+        self.assertEqual(kept_ids(els), [1, 2, 3, 4, 5, 6, 7])
+
+    def test_view_specific_false_or_invalid_owner_kept(self):
+        el = FakeElement(1, cat("Walls", -2000011), WALL_T)
+        el.ViewSpecific = False
+        el.OwnerViewId = INVALID
+        self.assertEqual(kept_ids([el]), [1])
+
+    def test_cheap_checks_before_bounding_box(self):
+        cheap = [
+            FakeImportInstance(1, cat("a.dwg", 9)),
+            FakeLinkInstance(2, cat("RVT Links", 8)),
+            FakeElement(3, None),
+            FakeElement(4, FakeCategory("Tag", ANNOTATION, cid=5)),
+            FakeElement(5, FakeCategory("Sub", MODEL, parent=object(), cid=6)),
+            FakeElement(6, cat("Lines", -2000051)),
+            FakeDetailLine(7, cat("Walls", -2000011)),
+            FakeOwned(8, cat("Walls", -2000011)),
+        ]
+        self.assertEqual(kept_ids(cheap), [])
+        self.assertEqual([e.bbox_calls for e in cheap], [0] * len(cheap))
+        keep = FakeElement(9, cat("Walls", -2000011), WALL_T)
+        kept_ids([keep])
+        self.assertEqual(keep.bbox_calls, 1)
 
 
 class FakeLevel(object):

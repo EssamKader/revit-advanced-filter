@@ -15,7 +15,21 @@ _UNSUPPORTED_VIEW_TYPES = (
 
 
 # Model-category elements that carry geometry but are not physical objects.
-_NON_PHYSICAL_CATEGORIES = ("OST_Cameras",)
+_NON_PHYSICAL_CATEGORIES = (
+    "OST_Cameras", "OST_Lines", "OST_Rooms", "OST_Areas", "OST_MEPSpaces",
+    "OST_HVAC_Zones",
+)
+
+# DB class names whose instances are never building elements (View is added
+# by collect_records; names missing in this Revit are skipped).
+_EXCLUDED_CLASS_NAMES = ("View", "ImportInstance", "RevitLinkInstance",
+                         "PointCloudInstance")
+
+
+def excluded_class_tuple():
+    """Tuple of Autodesk.Revit.DB classes from _EXCLUDED_CLASS_NAMES."""
+    import Autodesk.Revit.DB as DB
+    return tuple(getattr(DB, n) for n in _EXCLUDED_CLASS_NAMES if hasattr(DB, n))
 
 
 def non_physical_category_ids():
@@ -54,17 +68,26 @@ def view_isolate_problem(view):
     return None
 
 
-def is_model_element(element, model_category_type, view_class=None,
-                     excluded_category_ids=None):
-    """True for top-level Model-category elements that have model geometry.
+def _is_view_specific(element):
+    if getattr(element, "ViewSpecific", False):
+        return True
+    owner = getattr(element, "OwnerViewId", None)
+    return owner is not None and _id_int(owner) != -1
 
-    Live check showed Model-category non-geometric database elements
-    (Materials, Project Information, Sun Path, Legend Components, ...) with
-    no bounding box; they cannot be isolated, so they are skipped. View
-    elements (e.g. 3D views, category Cameras) report a Model category and a
-    bounding box but are not geometry, so view_class (DB.View) excludes them.
+
+def is_model_element(element, model_category_type, excluded_classes=None,
+                     excluded_category_ids=None):
+    """True for top-level physical Model-category elements with a bounding box.
+
+    Checks run cheapest first, get_BoundingBox last. excluded_classes (a
+    class or tuple: View, ImportInstance, RevitLinkInstance, PointCloudInstance)
+    drops views (category Cameras), CAD imports (own category per .dwg), links
+    and point clouds. Model-category non-geometric database elements
+    (Materials, Project Information, Sun Path, ...) have no bounding box.
+    View-specific elements (e.g. detail lines, category Lines) are dropped
+    too. Category ids in excluded_category_ids drop non-physical categories.
     """
-    if view_class is not None and isinstance(element, view_class):
+    if excluded_classes and isinstance(element, excluded_classes):
         return False
     cat = element.Category
     if cat is None or cat.CategoryType != model_category_type:
@@ -72,6 +95,8 @@ def is_model_element(element, model_category_type, view_class=None,
     if cat.Parent is not None:  # subcategory
         return False
     if excluded_category_ids and _id_int(cat.Id) in excluded_category_ids:
+        return False
+    if _is_view_specific(element):
         return False
     return element.get_BoundingBox(None) is not None
 
@@ -176,13 +201,13 @@ def make_record(element, get_type, view_ids=None, cache=None,
 
 
 def records_from_elements(elements, get_type, model_category_type,
-                          view_ids=None, view_class=None, level_resolver=None,
-                          excluded_category_ids=None):
+                          view_ids=None, excluded_classes=None,
+                          level_resolver=None, excluded_category_ids=None):
     records = []
     cache = {}
     for element in elements:
-        if is_model_element(element, model_category_type, view_class,
-                            excluded_category_ids):
+        if is_model_element(element, model_category_type,
+                            excluded_classes, excluded_category_ids):
             records.append(make_record(element, get_type, view_ids, cache,
                                        level_resolver))
     return records
@@ -209,7 +234,7 @@ def active_view_ids(doc, view):
 
 def collect_records(doc, view):
     """All model element instances as (ElementRecords, level elevations dict)."""
-    from Autodesk.Revit.DB import CategoryType, FilteredElementCollector, Level, View
+    from Autodesk.Revit.DB import CategoryType, FilteredElementCollector, Level
     view_ids = active_view_ids(doc, view)
     collector = FilteredElementCollector(doc).WhereElementIsNotElementType()
     type_cache = {}
@@ -222,7 +247,7 @@ def collect_records(doc, view):
 
     resolver = LevelResolver(doc.GetElement, level_param_keys(), Level)
     records = records_from_elements(collector, get_type, CategoryType.Model,
-                                    view_ids, View, resolver,
+                                    view_ids, excluded_class_tuple(), resolver,
                                     non_physical_category_ids())
     return records, resolver.elevations
 

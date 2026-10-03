@@ -16,7 +16,7 @@ nodes and clicks **Isolate** to temporarily isolate the matching elements in the
 | Filter depth | Category → Family → Type only (no parameter rules) |
 | UI | Modal WPF dialog (pyRevit `forms.WPFWindow` + XAML) |
 | Excluded | Element types, views, annotation categories, linked models, permanent isolate |
-| Geometric only (2026-10-03) | Keep an element only if its category is top-level Model, it is not a `View`, and `get_BoundingBox(None)` is not None. This drops Materials, Sun Path, Project Information, camera views and unplaced rooms. |
+| Geometric only (2026-10-03) | Keep an element only if it is a physical building element: not an instance of `View`, `ImportInstance` (CAD imports), `RevitLinkInstance` or `PointCloudInstance`; category is top-level (no subcategory), `CategoryType == Model` and not one of `OST_Cameras`, `OST_Lines` (model lines), `OST_Rooms`, `OST_Areas`, `OST_MEPSpaces`, `OST_HVAC_Zones` (user decision 2026-10-03: spatial elements excluded); not view-specific (`ViewSpecific` True or valid `OwnerViewId`, e.g. detail lines); and `get_BoundingBox(None)` is not None. Checks run cheapest first, bounding box last. This drops Materials, Sun Path, Project Information, camera views, CAD imports, links, detail/model lines and spatial elements. |
 | Level filter (2026-10-03) | Multi-select level checklist. Each element belongs to **one** level, its base/reference level; spanning levels doesn't count. Elements with no level go to `<No Level>`. |
 
 ## User stories
@@ -30,7 +30,7 @@ so that I can open the filter in one click.
 As a BIM engineer, I want all model element instances in the project collected and grouped by
 Category → Family → Type, so that I can see the model's whole composition.
 - **Acceptance:**
-  - Uses `FilteredElementCollector(doc).WhereElementIsNotElementType()`, restricted to categories where `CategoryType == Model` and the element has a valid category.
+  - Uses `FilteredElementCollector(doc).WhereElementIsNotElementType()`, restricted to physical building elements per the 'Geometric only' decision (Model categories only; CAD imports, links, point clouds, view-specific elements, lines and spatial elements Rooms/Areas/Spaces/HVAC Zones excluded).
   - Loadable-family instances group by `Family.Name` → `FamilySymbol.Name`.
   - System families (walls, floors, ducts, pipes …) group by the type's `FamilyName` property → type name.
   - Elements with no type go under the `<No Family>` / `<No Type>` buckets. They are never dropped.
