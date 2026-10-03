@@ -22,7 +22,7 @@ nodes and clicks **Isolate** to temporarily isolate the matching elements in the
 ## User stories
 
 ### US-1 — Launch
-As a BIM engineer, I want an **Advanced Filter** button on a pyRevit ribbon tab,
+As a BIM engineer, I want an **Advanced Filter** button on the existing **BIM Tools** ribbon tab (merged with ClashFlag's tab),
 so that I can open the filter in one click.
 - **Acceptance:** the extension `AdvancedFilter.extension` loads in pyRevit on Revit 2024. The button appears and opens the dialog. If no document is open, or the active view can't do temporary isolation (schedules, sheets, legends, templates), the button shows a clear message instead of the dialog.
 
@@ -114,11 +114,12 @@ As a BIM engineer, I want to limit the tree to elements on chosen levels (one, s
 ## Proposed layout
 ```
 AdvancedFilter.extension/
-  AdvancedFilter.tab/
+  BIM Tools.tab/        # same name as ClashFlag's tab so pyRevit merges them
     Filter.panel/
       Advanced Filter.pushbutton/
         script.py        # Revit glue: collect → dialog → isolate
         ui.xaml          # WPF dialog
+        bundle.yaml
         icon.png
   lib/advfilter/
     __init__.py
