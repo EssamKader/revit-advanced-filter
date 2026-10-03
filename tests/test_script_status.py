@@ -159,7 +159,8 @@ class ScriptStatusTests(unittest.TestCase):
                 calls.append("rollback")
 
         class FakeWindow(object):
-            ids_to_isolate = [1]
+            action = "isolate"
+            action_ids = [1]
 
             def __init__(self, *a):
                 self.counts = counts

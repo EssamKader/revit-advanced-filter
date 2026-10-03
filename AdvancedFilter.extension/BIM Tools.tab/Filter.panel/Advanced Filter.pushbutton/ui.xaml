@@ -22,6 +22,7 @@
             <RowDefinition Height="Auto"/>
             <RowDefinition Height="*"/>
             <RowDefinition Height="Auto"/>
+            <RowDefinition Height="Auto"/>
         </Grid.RowDefinitions>
         <TextBlock Grid.Row="0" Text="Category / Family / Type" FontSize="16" FontWeight="SemiBold" Margin="0,0,0,10"/>
         <Grid Grid.Row="1">
@@ -75,7 +76,18 @@
                           BorderBrush="#3F3F46" Padding="4"/>
             </Grid>
         </Grid>
-        <Grid Grid.Row="2" Margin="0,12,0,0">
+        <StackPanel Grid.Row="2" Orientation="Horizontal" Margin="0,12,0,0">
+            <CheckBox x:Name="colour_check" Content="Colour override" VerticalAlignment="Center"
+                      Checked="colour_check_changed" Unchecked="colour_check_changed"/>
+            <Border x:Name="colour_swatch" Width="16" Height="16" CornerRadius="3" Margin="8,0,0,0"
+                    BorderBrush="#3F3F46" BorderThickness="1" Cursor="Hand" Visibility="Collapsed"
+                    VerticalAlignment="Center" MouseLeftButtonUp="colour_swatch_click"/>
+            <Button x:Name="apply_colour_button" Content="Apply colour" Margin="14,0,0,0"
+                    IsEnabled="False" Click="apply_colour_click"/>
+            <Button x:Name="reset_colours_button" Content="Reset colours" IsEnabled="False"
+                    Click="reset_colours_click"/>
+        </StackPanel>
+        <Grid Grid.Row="3" Margin="0,12,0,0">
             <Grid.ColumnDefinitions>
                 <ColumnDefinition Width="*"/>
                 <ColumnDefinition Width="Auto"/>

@@ -6,6 +6,7 @@ clr.AddReference("PresentationCore")
 clr.AddReference("WindowsBase")
 
 from System.Collections.Generic import List
+import System
 from System import TimeSpan
 from System.Windows import Visibility
 from System.Windows.Media import SolidColorBrush, Color
@@ -14,10 +15,51 @@ from System.Windows.Controls import CheckBox, TreeViewItem
 from Autodesk.Revit import DB
 from pyrevit import forms, script
 
-from advfilter import core, revit_adapter
+from advfilter import core, colour, revit_adapter
 
 uidoc = __revit__.ActiveUIDocument
 doc = uidoc.Document if uidoc else None
+
+
+def pick_colour(initial, custom_colors):
+    """Show the Windows colour dialog. Returns (rgb or None, custom_colors)."""
+    clr.AddReference("System.Windows.Forms")
+    clr.AddReference("System.Drawing")
+    from System.Windows.Forms import ColorDialog, DialogResult
+    from System.Drawing import Color as DrawingColor
+    dialog = ColorDialog()
+    dialog.FullOpen = True
+    if custom_colors:
+        dialog.CustomColors = System.Array[int](custom_colors)
+    if initial is not None:
+        dialog.Color = DrawingColor.FromArgb(initial[0], initial[1], initial[2])
+    try:
+        if dialog.ShowDialog() == DialogResult.OK:
+            return colour.to_rgb(dialog.Color), list(dialog.CustomColors)
+        return None, list(dialog.CustomColors)
+    finally:
+        dialog.Dispose()
+
+
+def load_colour_state():
+    """(last rgb or None, custom colours or None) from the pyRevit config."""
+    try:
+        cfg = script.get_config()
+        return (colour.parse_rgb(getattr(cfg, "last_rgb", None)),
+                colour.parse_ints(getattr(cfg, "custom_colors", None)))
+    except Exception:
+        return None, None
+
+
+def save_colour_state(rgb, custom_colors):
+    try:
+        cfg = script.get_config()
+        cfg.last_rgb = colour.format_rgb(rgb)
+        if custom_colors:
+            cfg.custom_colors = colour.format_ints(custom_colors)
+        script.save_config()
+    except Exception:
+        pass
 
 
 class FilterWindow(forms.WPFWindow):
@@ -36,6 +78,10 @@ class FilterWindow(forms.WPFWindow):
         self._timer.Tick += self._on_search_tick
         self.search_box.TextChanged += self._on_search_changed
         self.ids_to_isolate = None
+        self.action = None  # "isolate" / "colour" / "reset" once the window closes
+        self.action_ids = None
+        self.colour_rgb, self._custom_colors = load_colour_state()
+        self._m = 0
         self.counts = (0, 0)  # (N, M) captured when Isolate closes the window
         self._fg_brush = SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6))
         self._muted_brush = SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80))
@@ -198,22 +244,86 @@ class FilterWindow(forms.WPFWindow):
             self.status_text.Text = u"%d matched · %d in active view" % (n, m)
             self.status_text.Foreground = self._fg_brush
         self.isolate_button.IsEnabled = m > 0
+        self._m = m
+        self._update_colour_buttons()
 
-    def isolate_click(self, sender, args):
+    def _update_colour_buttons(self):
+        apply_on, reset_on = colour.action_enabled(
+            self.colour_check.IsChecked, self.colour_rgb is not None, self._m)
+        self.apply_colour_button.IsEnabled = apply_on
+        self.reset_colours_button.IsEnabled = reset_on
+
+    def _choose_colour(self):
+        """Open the picker; returns True if a colour was chosen."""
+        rgb, custom = pick_colour(self.colour_rgb, self._custom_colors)
+        if custom:
+            self._custom_colors = custom
+        if rgb is None:
+            return False
+        self.colour_rgb = rgb
+        save_colour_state(rgb, self._custom_colors)
+        self.colour_swatch.Background = SolidColorBrush(Color.FromRgb(*rgb))
+        return True
+
+    def colour_check_changed(self, sender, args):
+        if self._busy:
+            return
+        if self.colour_check.IsChecked:
+            if not self._choose_colour() and self.colour_rgb is None:
+                self._busy = True
+                try:
+                    self.colour_check.IsChecked = False
+                finally:
+                    self._busy = False
+        self.colour_swatch.Visibility = (
+            Visibility.Visible if self.colour_check.IsChecked
+            else Visibility.Collapsed)
+        self._update_colour_buttons()
+
+    def colour_swatch_click(self, sender, args):
+        if self._choose_colour():
+            self._update_colour_buttons()
+
+    def _checked_in_view(self):
+        """Checked ids in the active view, or None after showing an alert."""
         self._flush_search()
         checked = core.checked_element_ids(self._roots)
         if not checked:
             forms.alert("Check at least one category, family or type.",
                         title="Advanced Filter")
-            return
+            return None
         in_view = core.ids_in_view(checked, self._view_ids)
         if not in_view:
             forms.alert("None of the checked elements are in the active view.",
                         title="Advanced Filter")
-            return
+            return None
+        return in_view
+
+    def _finish(self, action, in_view):
         self.counts = core.selection_counts(self._roots, self._view_ids)
-        self.ids_to_isolate = in_view
+        self.action = action
+        self.action_ids = in_view
         self.Close()
+
+    def apply_colour_click(self, sender, args):
+        if self.colour_rgb is None:
+            forms.alert("Choose a colour first.", title="Advanced Filter")
+            return
+        in_view = self._checked_in_view()
+        if in_view:
+            self._finish("colour", in_view)
+
+    def reset_colours_click(self, sender, args):
+        in_view = self._checked_in_view()
+        if in_view:
+            self._finish("reset", in_view)
+
+    def isolate_click(self, sender, args):
+        in_view = self._checked_in_view()
+        if not in_view:
+            return
+        self.ids_to_isolate = in_view
+        self._finish("isolate", in_view)
 
     def cancel_click(self, sender, args):
         self.Close()
@@ -233,6 +343,47 @@ def isolate(view, int_ids):
         if txn.HasStarted():
             txn.RollBack()
         forms.alert("Isolate failed:\n%s" % ex, title="Advanced Filter")
+        return False
+
+
+def _id_list(int_ids):
+    return [DB.ElementId(i) for i in int_ids]
+
+
+def apply_colour(view, int_ids, rgb):
+    txn = DB.Transaction(doc, "Advanced Filter: Colour override")
+    try:
+        txn.Start()
+        fill_id = revit_adapter.solid_fill_id(doc)
+        if fill_id is None:
+            txn.RollBack()
+            forms.alert("No solid fill pattern found in this project.",
+                        title="Advanced Filter")
+            return False
+        ogs = revit_adapter.build_overrides(colour.override_plan(rgb, fill_id))
+        for eid in _id_list(int_ids):
+            view.SetElementOverrides(eid, ogs)
+        txn.Commit()
+        return True
+    except Exception as ex:
+        if txn.HasStarted():
+            txn.RollBack()
+        forms.alert("Colour override failed:\n%s" % ex, title="Advanced Filter")
+        return False
+
+
+def reset_colours(view, int_ids):
+    txn = DB.Transaction(doc, "Advanced Filter: Reset colours")
+    try:
+        txn.Start()
+        for eid in _id_list(int_ids):
+            view.SetElementOverrides(eid, DB.OverrideGraphicSettings())
+        txn.Commit()
+        return True
+    except Exception as ex:
+        if txn.HasStarted():
+            txn.RollBack()
+        forms.alert("Reset colours failed:\n%s" % ex, title="Advanced Filter")
         return False
 
 
@@ -273,11 +424,17 @@ def main():
 
     window = FilterWindow(script.get_bundle_file("ui.xaml"), records, elevations)
     window.ShowDialog()
-    if window.ids_to_isolate:
-        if isolate(view, window.ids_to_isolate):
-            notice = core.hidden_notice(*window.counts)
-            if notice:
-                notify(notice)
+    ok = False
+    if window.action == "isolate":
+        ok = isolate(view, window.action_ids)
+    elif window.action == "colour":
+        ok = apply_colour(view, window.action_ids, window.colour_rgb)
+    elif window.action == "reset":
+        ok = reset_colours(view, window.action_ids)
+    if ok:
+        notice = core.hidden_notice(*window.counts)
+        if notice:
+            notify(notice)
 
 
 main()

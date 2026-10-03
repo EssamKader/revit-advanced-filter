@@ -117,7 +117,7 @@ Decisions (user, 2026-10-03):
   - **Colour override checkbox:** ticking it opens the colour dialog right away.
     - Cancelling the dialog leaves the box unticked.
     - Once a colour is chosen, a clickable swatch next to the box shows it; clicking the swatch reopens the dialog.
-    - Unticking the box hides the swatch, but the colour is remembered for the session.
+    - Unticking the box hides the swatch, but the colour is remembered. The last colour and custom colours persist across sessions in the pyRevit script config.
   - **Apply colour button:**
     - Enabled only when the box is ticked and M > 0, i.e. checked elements exist in the active view.
     - Applies `OverrideGraphicSettings` to the checked ids in the active view, inside one Transaction "Advanced Filter: Colour override", then closes the dialog.

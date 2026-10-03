@@ -88,6 +88,14 @@ class FakeWPFWindow(object):
         self.search_hint = FakeBlock()
         self.status_text = types.SimpleNamespace(Text="", Foreground=None)
         self.isolate_button = types.SimpleNamespace(IsEnabled=True)
+        self.colour_check = types.SimpleNamespace(IsChecked=False)
+        self.colour_swatch = types.SimpleNamespace(Visibility="Collapsed", Background=None)
+        self.apply_colour_button = types.SimpleNamespace(IsEnabled=True)
+        self.reset_colours_button = types.SimpleNamespace(IsEnabled=True)
+
+
+CONFIG = types.SimpleNamespace()
+SAVES = []
 
 
 def load_script():
@@ -104,7 +112,7 @@ def load_script():
         Collapsed = "Collapsed"
 
     clr = mod("clr", AddReference=lambda n: None)
-    mod("System", TimeSpan=types.SimpleNamespace(FromMilliseconds=lambda ms: ms))
+    mod("System", Array=None, TimeSpan=types.SimpleNamespace(FromMilliseconds=lambda ms: ms))
     mod("System.Collections")
     mod("System.Collections.Generic", List=list)
     mod("System.Windows", Visibility=Vis)
@@ -118,7 +126,8 @@ def load_script():
     mod("Autodesk.Revit", DB=types.SimpleNamespace())
     mod("pyrevit", forms=types.SimpleNamespace(
         WPFWindow=FakeWPFWindow, alert=lambda *a, **k: None),
-        script=types.SimpleNamespace())
+        script=types.SimpleNamespace(
+            get_config=lambda: CONFIG, save_config=lambda: SAVES.append(1)))
     saved = dict((k, sys.modules.get(k)) for k in mods)
     sys.modules.update(mods)
     try:
