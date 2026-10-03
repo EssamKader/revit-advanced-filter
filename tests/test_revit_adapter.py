@@ -139,6 +139,19 @@ class MappingTests(unittest.TestCase):
         recs = records([view3d, FakeElement(2, WALLS, WALL_T)])
         self.assertEqual([r.element_id for r in recs], [2])
 
+    def test_non_physical_category_excluded_by_id(self):
+        cam_cat = FakeCategory("Cameras")
+        cam_cat.Id = FakeId(-2000500)
+        WALLS.Id = FakeId(-2000011)
+        cam = FakeElement(352540, cam_cat, bbox=True)  # plain Element, not a View
+        recs = ra.records_from_elements(
+            [cam, FakeElement(2, WALLS, WALL_T)], get_type, MODEL,
+            view_class=FakeViewElement, excluded_category_ids=set([-2000500]))
+        self.assertEqual([r.element_id for r in recs], [2])
+        # without the exclusion the camera leaks (the bug being fixed)
+        self.assertEqual(len(ra.records_from_elements(
+            [cam], get_type, MODEL, view_class=FakeViewElement)), 1)
+
     def test_view_check_skipped_when_no_view_class(self):
         self.assertTrue(ra.is_model_element(
             FakeViewElement(9, FakeCategory("Cameras")), MODEL))
@@ -171,6 +184,126 @@ class MappingTests(unittest.TestCase):
         tree = build_tree(records(els))
         self.assertEqual([(n.name, n.count) for n in tree],
                          [("Doors", 1), ("Walls", 2)])
+
+
+class FakeLevel(object):
+    def __init__(self, lid, name, elevation):
+        self.Id = FakeId(lid)
+        self.Name = name
+        self.Elevation = elevation
+
+
+class FakeParam(object):
+    def __init__(self, storage, value):
+        self.StorageType = storage
+        self._value = value
+
+    def AsElementId(self):
+        return self._value
+
+
+class FakeLeveled(FakeElement):
+    def __init__(self, eid, category, level_id=None, params=None, etype=None):
+        FakeElement.__init__(self, eid, category, etype)
+        self.LevelId = level_id if level_id is not None else INVALID
+        self._params = params or {}
+
+    def get_Parameter(self, key):
+        return self._params.get(key)
+
+
+L1 = FakeLevel(10, "Level 1", 0.0)
+L2 = FakeLevel(11, "Level 2", 13.12)
+ELEMENTS = {10: L1, 11: L2, 500: WALL_T}
+KEYS = ["INST_REF", "RBS_START", "FAMILY_LVL", "SCHED_LVL", "STAIRS_BASE"]
+
+
+def make_resolver(calls=None):
+    def get_element(eid):
+        if calls is not None:
+            calls.append(eid.IntegerValue)
+        return ELEMENTS.get(eid.IntegerValue)
+    return ra.LevelResolver(get_element, KEYS)
+
+
+def eid_param(value):
+    return FakeParam("ElementId", FakeId(value))
+
+
+class LevelResolutionTests(unittest.TestCase):
+    def name(self, element):
+        return make_resolver().level_name(element)
+
+    def test_level_id_first(self):
+        el = FakeLeveled(1, WALLS, FakeId(10), {KEYS[0]: eid_param(11)})
+        self.assertEqual(self.name(el), "Level 1")
+
+    def test_each_parameter_step(self):
+        for key in KEYS:
+            el = FakeLeveled(1, WALLS, None, {key: eid_param(11)})
+            self.assertEqual(self.name(el), "Level 2", key)
+
+    def test_parameter_order(self):
+        el = FakeLeveled(1, WALLS, None, {KEYS[3]: eid_param(11),
+                                          KEYS[1]: eid_param(10)})
+        self.assertEqual(self.name(el), "Level 1")  # RBS_START before SCHEDULE
+
+    def test_invalid_level_id_falls_through(self):
+        el = FakeLeveled(1, WALLS, FakeId(-1), {KEYS[0]: eid_param(10)})
+        self.assertEqual(self.name(el), "Level 1")
+
+    def test_level_id_not_a_level_falls_through(self):
+        el = FakeLeveled(1, WALLS, FakeId(500), {KEYS[0]: eid_param(11)})
+        self.assertEqual(self.name(el), "Level 2")
+
+    def test_missing_element_falls_through(self):
+        el = FakeLeveled(1, WALLS, FakeId(999), {KEYS[1]: eid_param(10)})
+        self.assertEqual(self.name(el), "Level 1")
+
+    def test_param_rules(self):
+        cases = [
+            FakeParam("Integer", FakeId(10)),   # wrong storage
+            FakeParam("ElementId", INVALID),    # invalid id
+            FakeParam("ElementId", FakeId(500)),  # not a level
+            FakeParam("ElementId", FakeId(999)),  # unresolvable
+            FakeParam("ElementId", None),
+        ]
+        for p in cases:
+            el = FakeLeveled(1, WALLS, None, {KEYS[0]: p, KEYS[2]: eid_param(11)})
+            self.assertEqual(self.name(el), "Level 2")
+            el = FakeLeveled(1, WALLS, None, {KEYS[0]: p})
+            self.assertIsNone(self.name(el))
+
+    def test_no_level_info_is_none_and_becomes_no_level(self):
+        el = FakeLeveled(1, WALLS)
+        self.assertIsNone(self.name(el))
+        recs = ra.records_from_elements([el], get_type, MODEL,
+                                        level_resolver=make_resolver())
+        self.assertEqual(recs[0].level, "<No Level>")
+
+    def test_cache_and_elevations(self):
+        calls = []
+        r = make_resolver(calls)
+        for i in range(4):
+            r.level_name(FakeLeveled(i, WALLS, FakeId(10)))
+        r.level_name(FakeLeveled(9, WALLS, None, {KEYS[0]: eid_param(11)}))
+        self.assertEqual(calls, [10, 11])
+        self.assertEqual(r.elevations, {"Level 1": 0.0, "Level 2": 13.12})
+
+    def test_records_get_levels_order_and_filter(self):
+        from advfilter.core import filter_by_levels, ordered_levels
+        r = make_resolver()
+        els = [FakeLeveled(1, WALLS, FakeId(11), etype=WALL_T),
+               FakeLeveled(2, WALLS, FakeId(10), etype=WALL_T),
+               FakeLeveled(3, DOORS, None, {KEYS[0]: eid_param(10)}, DOOR_T),
+               FakeLeveled(4, DOORS, None, etype=DOOR_T)]
+        recs = ra.records_from_elements(els, get_type, MODEL, level_resolver=r)
+        self.assertEqual([x.level for x in recs],
+                         ["Level 2", "Level 1", "Level 1", "<No Level>"])
+        self.assertEqual(ordered_levels(recs, r.elevations),
+                         ["Level 1", "Level 2", "<No Level>"])
+        tree = build_tree(filter_by_levels(recs, ["Level 2"]))
+        self.assertEqual([(n.name, n.count) for n in tree], [("Walls", 1)])
 
 
 class ViewGuardTests(unittest.TestCase):

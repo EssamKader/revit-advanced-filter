@@ -8,7 +8,9 @@ sys.path.insert(0, os.path.join(
     "AdvancedFilter.extension", "lib"))
 
 from advfilter.core import (  # noqa: E402
-    ElementRecord, build_tree, iter_element_ids, NO_FAMILY, NO_TYPE)
+    ElementRecord, build_tree, iter_element_ids, NO_FAMILY, NO_TYPE, NO_LEVEL,
+    filter_by_levels, ordered_levels, checked_paths, apply_checked_paths,
+    checked_element_ids, merge_checked_paths)
 
 
 def rec(eid, cat, fam, typ, in_view=True):
@@ -181,6 +183,137 @@ class SelectionTests(unittest.TestCase):
     def test_ids_in_view_intersection(self):
         self.assertEqual(self.in_view([1, 2, 3], set([2, 3, 9])), [2, 3])
         self.assertEqual(self.in_view([1], set()), [])
+
+
+def lrec(eid, cat, fam, typ, level):
+    return ElementRecord(eid, cat, fam, typ, True, level)
+
+
+def all_nodes(roots):
+    for n in roots:
+        yield n
+        for sub in all_nodes(n.children):
+            yield sub
+
+
+LEVEL_RECS = [
+    lrec(1, "Walls", "Basic Wall", "W200", "L1"),
+    lrec(2, "Walls", "Basic Wall", "W200", "L2"),
+    lrec(3, "Walls", "Curtain", "CW", "L1"),
+    lrec(4, "Doors", "Single", "D1", "L1"),
+    lrec(5, "Doors", "Single", "D1", None),
+    lrec(6, "Floors", "Floor", "F150", "L2"),
+]
+
+
+class LevelTests(unittest.TestCase):
+    def test_blank_level_is_no_level(self):
+        for v in (None, "", "   "):
+            self.assertEqual(lrec(1, "A", "B", "C", v).level, NO_LEVEL)
+        self.assertEqual(ElementRecord(1, "A").level, NO_LEVEL)
+        self.assertEqual(lrec(1, "A", "B", "C", " L1 ").level, "L1")
+
+    def test_filter_none_or_empty_is_all(self):
+        self.assertEqual(len(filter_by_levels(LEVEL_RECS, None)), 6)
+        self.assertEqual(len(filter_by_levels(LEVEL_RECS, [])), 6)
+
+    def test_filter_single_and_multiple(self):
+        self.assertEqual([r.element_id for r in filter_by_levels(LEVEL_RECS, ["L2"])], [2, 6])
+        got = filter_by_levels(LEVEL_RECS, ["L2", NO_LEVEL])
+        self.assertEqual([r.element_id for r in got], [2, 5, 6])
+
+    def test_filter_unknown_level_is_empty(self):
+        self.assertEqual(filter_by_levels(LEVEL_RECS, ["Nope"]), [])
+
+    def test_counts_reflect_selected_levels(self):
+        tree = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
+        self.assertEqual([(n.name, n.count) for n in tree],
+                         [("Doors", 1), ("Walls", 2)])
+
+    def test_no_zero_count_or_empty_nodes_after_filtering(self):
+        for sel in (["L1"], ["L2"], [NO_LEVEL], ["L1", "L2"], ["Nope"], None):
+            tree = build_tree(filter_by_levels(LEVEL_RECS, sel))
+            for node in all_nodes(tree):
+                self.assertGreater(node.count, 0, (sel, node))
+                if node.level != "type":
+                    self.assertTrue(node.children, (sel, node))
+
+    def test_family_only_on_l1_vanishes_on_l2(self):
+        tree = build_tree(filter_by_levels(LEVEL_RECS, ["L2"]))
+        walls = [n for n in tree if n.name == "Walls"][0]
+        self.assertEqual([f.name for f in walls.children], ["Basic Wall"])
+        self.assertEqual([n.name for n in tree], ["Floors", "Walls"])
+
+    def test_ordered_levels_by_elevation_no_level_last(self):
+        recs = [lrec(1, "A", "B", "C", n) for n in ("L3", None, "L1", "L2", "L1")]
+        el = {"L1": 0.0, "L2": 13.1, "L3": -5.0, "Unused": 99.0}
+        self.assertEqual(ordered_levels(recs, el), ["L3", "L1", "L2", NO_LEVEL])
+
+    def test_ordered_levels_only_existing(self):
+        recs = [lrec(1, "A", "B", "C", "L1")]
+        self.assertEqual(ordered_levels(recs, {"L1": 0, "L2": 5}), ["L1"])
+
+    def test_ordered_levels_missing_elevation_after_known_by_name(self):
+        recs = [lrec(i, "A", "B", "C", n) for i, n in enumerate(("zz", "Aa", "L1", None))]
+        self.assertEqual(ordered_levels(recs, {"L1": 0}), ["L1", "Aa", "zz", NO_LEVEL])
+
+
+class CheckStatePreservationTests(unittest.TestCase):
+    def test_paths_roundtrip_across_level_rebuild(self):
+        tree = build_tree(LEVEL_RECS)
+        walls = [n for n in tree if n.name == "Walls"][0]
+        walls.children[0].checked = True               # family Basic Wall
+        walls.children[0].children[0].checked = True   # type W200
+        floors = [n for n in tree if n.name == "Floors"][0]
+        floors.checked = True
+        saved = checked_paths(tree)
+        self.assertEqual(saved, set([
+            ("Walls", "Basic Wall"), ("Walls", "Basic Wall", "W200"),
+            ("Floors",)]))
+
+        new_tree = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
+        apply_checked_paths(new_tree, saved)
+        # Floors has nothing on L1 -> gone; Walls/Basic Wall/W200 survive.
+        self.assertEqual(names(new_tree), ["Doors", "Walls"])
+        self.assertEqual(sorted(checked_element_ids(new_tree)), [1])
+        self.assertEqual(checked_paths(new_tree), set([
+            ("Walls", "Basic Wall"), ("Walls", "Basic Wall", "W200")]))
+
+    def test_state_restored_when_level_comes_back(self):
+        tree = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
+        apply_checked_paths(tree, set([("Walls", "Curtain")]))
+        saved = checked_paths(tree)
+        again = build_tree(LEVEL_RECS)
+        apply_checked_paths(again, saved)
+        self.assertEqual(checked_element_ids(again), [3])
+
+    def test_hide_and_restore_keeps_check(self):
+        memory = set()
+        tree = build_tree(LEVEL_RECS)
+        apply_checked_paths(tree, memory)
+        [n for n in tree if n.name == "Walls"][0].children[1].checked = True  # Curtain (L1 only)
+        memory = merge_checked_paths(memory, tree)
+        hidden = build_tree(filter_by_levels(LEVEL_RECS, ["L2"]))
+        apply_checked_paths(hidden, memory)
+        memory = merge_checked_paths(memory, hidden)  # Curtain not visible: kept
+        self.assertIn(("Walls", "Curtain"), memory)
+        back = build_tree(LEVEL_RECS)
+        apply_checked_paths(back, memory)
+        self.assertEqual(checked_element_ids(back), [3])
+
+    def test_unchecking_visible_node_forgets_it(self):
+        tree = build_tree(LEVEL_RECS)
+        apply_checked_paths(tree, set([("Walls", "Curtain")]))
+        memory = merge_checked_paths(set([("Walls", "Curtain")]), tree)
+        self.assertEqual(memory, set([("Walls", "Curtain")]))
+        [n for n in tree if n.name == "Walls"][0].children[1].checked = False
+        memory = merge_checked_paths(memory, tree)
+        self.assertEqual(memory, set())
+
+    def test_empty_selection_tree_has_nothing_to_isolate(self):
+        tree = build_tree([])
+        apply_checked_paths(tree, set([("Walls",)]))
+        self.assertEqual(checked_element_ids(tree), [])
 
 
 if __name__ == "__main__":

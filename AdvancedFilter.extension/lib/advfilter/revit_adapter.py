@@ -14,6 +14,17 @@ _UNSUPPORTED_VIEW_TYPES = (
 )
 
 
+# Model-category elements that carry geometry but are not physical objects.
+_NON_PHYSICAL_CATEGORIES = ("OST_Cameras",)
+
+
+def non_physical_category_ids():
+    """Int ids of _NON_PHYSICAL_CATEGORIES (names missing in this Revit are skipped)."""
+    from Autodesk.Revit.DB import BuiltInCategory
+    return set(int(getattr(BuiltInCategory, n)) for n in _NON_PHYSICAL_CATEGORIES
+               if hasattr(BuiltInCategory, n))
+
+
 def _id_int(element_id):
     return element_id.IntegerValue
 
@@ -43,7 +54,8 @@ def view_isolate_problem(view):
     return None
 
 
-def is_model_element(element, model_category_type, view_class=None):
+def is_model_element(element, model_category_type, view_class=None,
+                     excluded_category_ids=None):
     """True for top-level Model-category elements that have model geometry.
 
     Live check showed Model-category non-geometric database elements
@@ -58,6 +70,8 @@ def is_model_element(element, model_category_type, view_class=None):
     if cat is None or cat.CategoryType != model_category_type:
         return False
     if cat.Parent is not None:  # subcategory
+        return False
+    if excluded_category_ids and _id_int(cat.Id) in excluded_category_ids:
         return False
     return element.get_BoundingBox(None) is not None
 
@@ -87,22 +101,90 @@ def _names_of_type(etype):
     return family, element_name(etype)
 
 
-def make_record(element, get_type, view_ids=None, cache=None):
+class LevelResolver(object):
+    """Resolves the level name of an element, caching level id -> (name, elevation).
+
+    Order: Element.LevelId, then each parameter key in param_keys. A
+    parameter counts only if it has ElementId storage, holds a valid id and
+    that id resolves to a Level. get_element and param_keys are injected so
+    the logic runs against fakes.
+    """
+
+    def __init__(self, get_element, param_keys, level_class=None):
+        self._get_element = get_element
+        self._param_keys = list(param_keys)
+        self._level_class = level_class
+        self._cache = {}  # level id int -> (name, elevation) or None
+        self.elevations = {}  # level name -> elevation
+
+    def _is_level(self, obj):
+        if obj is None:
+            return False
+        if self._level_class is not None:
+            return isinstance(obj, self._level_class)
+        return hasattr(obj, "Elevation")
+
+    def _lookup(self, element_id):
+        if element_id is None or _id_int(element_id) == -1:
+            return None
+        key = _id_int(element_id)
+        if key not in self._cache:
+            level = self._get_element(element_id)
+            if self._is_level(level):
+                name = element_name(level)
+                self._cache[key] = name
+                self.elevations[name] = level.Elevation
+            else:
+                self._cache[key] = None
+        return self._cache[key]
+
+    def level_name(self, element):
+        """Level name for element, or None (-> <No Level>)."""
+        name = self._lookup(getattr(element, "LevelId", None))
+        if name:
+            return name
+        for key in self._param_keys:
+            param = element.get_Parameter(key)
+            if param is None or str(param.StorageType) != "ElementId":
+                continue
+            name = self._lookup(param.AsElementId())
+            if name:
+                return name
+        return None
+
+
+def level_param_keys():
+    """BuiltInParameters tried after LevelId, in spec order (missing skipped)."""
+    from Autodesk.Revit.DB import BuiltInParameter
+    names = ("INSTANCE_REFERENCE_LEVEL_PARAM", "RBS_START_LEVEL_PARAM",
+             "FAMILY_LEVEL_PARAM", "SCHEDULE_LEVEL_PARAM",
+             "STAIRS_BASE_LEVEL_PARAM")
+    return [getattr(BuiltInParameter, n) for n in names
+            if hasattr(BuiltInParameter, n)]
+
+
+def make_record(element, get_type, view_ids=None, cache=None,
+                level_resolver=None):
     """Map one element to an ElementRecord (category already validated)."""
     family, type_name = type_names(element, get_type, cache)
     element_id = _id_int(element.Id)
+    level = level_resolver.level_name(element) if level_resolver else None
     return ElementRecord(
         element_id, element.Category.Name, family, type_name,
-        in_active_view=(view_ids is not None and element_id in view_ids))
+        in_active_view=(view_ids is not None and element_id in view_ids),
+        level=level)
 
 
 def records_from_elements(elements, get_type, model_category_type,
-                          view_ids=None, view_class=None):
+                          view_ids=None, view_class=None, level_resolver=None,
+                          excluded_category_ids=None):
     records = []
     cache = {}
     for element in elements:
-        if is_model_element(element, model_category_type, view_class):
-            records.append(make_record(element, get_type, view_ids, cache))
+        if is_model_element(element, model_category_type, view_class,
+                            excluded_category_ids):
+            records.append(make_record(element, get_type, view_ids, cache,
+                                       level_resolver))
     return records
 
 
@@ -114,8 +196,8 @@ def active_view_ids(doc, view):
 
 
 def collect_records(doc, view):
-    """All model element instances of the project as ElementRecords."""
-    from Autodesk.Revit.DB import CategoryType, FilteredElementCollector, View
+    """All model element instances as (ElementRecords, level elevations dict)."""
+    from Autodesk.Revit.DB import CategoryType, FilteredElementCollector, Level, View
     view_ids = active_view_ids(doc, view)
     collector = FilteredElementCollector(doc).WhereElementIsNotElementType()
     type_cache = {}
@@ -126,5 +208,8 @@ def collect_records(doc, view):
             type_cache[key] = doc.GetElement(type_id)
         return type_cache[key]
 
-    return records_from_elements(collector, get_type, CategoryType.Model,
-                                 view_ids, View)
+    resolver = LevelResolver(doc.GetElement, level_param_keys(), Level)
+    records = records_from_elements(collector, get_type, CategoryType.Model,
+                                    view_ids, View, resolver,
+                                    non_physical_category_ids())
+    return records, resolver.elevations
