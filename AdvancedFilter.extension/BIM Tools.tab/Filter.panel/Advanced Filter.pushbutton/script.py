@@ -9,9 +9,10 @@ clr.AddReference("WindowsBase")
 
 from System.Collections.Generic import List
 import System
-from System import TimeSpan
+from System import TimeSpan, Uri, UriKind
 from System.Windows import Visibility, WindowState
 from System.Windows.Media import SolidColorBrush, Color
+from System.Windows.Media.Imaging import BitmapImage, BitmapCacheOption
 from System.Windows.Threading import DispatcherTimer
 from System.Windows.Controls import CheckBox, TreeViewItem
 from Autodesk.Revit import DB, UI
@@ -101,9 +102,28 @@ def save_scope(scope):
         pass
 
 
+def load_window_icon():
+    """BitmapImage of the bundle's icon.png, or None if it cannot be loaded."""
+    try:
+        image = BitmapImage()
+        image.BeginInit()
+        image.UriSource = Uri(script.get_bundle_file("icon.png"),
+                              UriKind.Absolute)
+        image.CacheOption = BitmapCacheOption.OnLoad  # release the file
+        image.EndInit()
+        image.Freeze()
+        return image
+    except Exception:
+        return None
+
+
 class FilterWindow(forms.WPFWindow):
     def __init__(self, xaml_file, records, elevations, document=None):
         forms.WPFWindow.__init__(self, xaml_file)
+        # WPFWindow.__init__ sets the pyRevit default icon; override it after.
+        icon = load_window_icon()
+        if icon is not None:
+            self.Icon = icon
         self._doc = document
         self._doc_key = doc_key_of(document) if document is not None else None
         self._closed = False
