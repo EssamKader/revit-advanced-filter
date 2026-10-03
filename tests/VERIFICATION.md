@@ -167,3 +167,37 @@ expand/collapse flipping every item.
 
 Live-only: button row look/padding on the dark style, handlers wiring from XAML `Click=` names, real
 TreeView expansion rendering.
+
+## Issue #18 - Colour override (US-10)
+
+Pure logic in `lib/advfilter/colour.py`: `to_rgb` (clamps to 0..255 ints), `override_plan(rgb, fill_id)`
+(ordered setter-name/value pairs: surface and cut foreground pattern id, colour and visible, then
+projection and cut line colour), `action_enabled(ticked, chosen, m)` -> (apply, reset) and
+`find_solid_fill_id` (first pattern with `IsSolidFill` and `str(Target) == "Drafting"`).
+`revit_adapter.solid_fill_id(doc)` and `build_overrides(plan)` (getattr setters, tuples -> `DB.Color`)
+are tested against fake `Autodesk.Revit.DB` modules in `tests/test_colour.py`.
+
+script.py: `pick_colour()` wraps `System.Windows.Forms.ColorDialog` (FullOpen, session-wide
+`FilterWindow._custom_colors`); tests replace it. The tick/cancel/untick/swatch rules, button enable
+states, guards, and the `self.action` field ("isolate" / "colour" / "reset", plus `action_ids`,
+`counts`, `colour_rgb`) are exercised through the fake-module harness. `apply_colour` and
+`reset_colours` run against a fake Transaction/view: commit per id, rollback with alert when no solid
+fill, rollback on exception. `main()` dispatch is checked per action; Isolate tests were adapted to the
+`action` field and behave as before.
+
+Live probe (read-only, Revit 2024): one solid FillPatternElement, `<Solid fill>`, Target Drafting,
+Id 3; `OverrideGraphicSettings` has `SetSurfaceForegroundPatternVisible` and
+`SetCutForegroundPatternVisible`.
+
+Live-only: the real ColorDialog (FullOpen, custom colours persisting, modal over the WPF window),
+swatch rendering and hand cursor, new row layout in the dark style, the actual override look in plan
+and section (cut pattern colour), Ctrl+Z undoing one action, and that `Color(int,int,int)` accepts
+IronPython ints.
+
+Persistence: pyRevit re-executes script.py on every press, so class attributes cannot hold the
+colour. The last colour (`last_rgb` as "r,g,b") and the ColorDialog custom colours (`custom_colors`
+as comma-separated ints) are stored with `script.get_config()` / `script.save_config()` after each
+successful pick and read once at window init. This widens US-10 from "session" to "across sessions"
+(accepted by the user). Config read/write is wrapped in try/except so it never blocks the dialog.
+Parse/format helpers live in colour.py (`format_rgb`, `parse_rgb`, `format_ints`, `parse_ints`).
+Live-only: the real config file round trip and `System.Array[int]` for `CustomColors`.

@@ -213,3 +213,22 @@ def collect_records(doc, view):
                                     view_ids, View, resolver,
                                     non_physical_category_ids())
     return records, resolver.elevations
+
+
+def solid_fill_id(doc):
+    """ElementId of the Drafting <Solid fill> pattern, or None."""
+    from Autodesk.Revit.DB import FilteredElementCollector, FillPatternElement
+    from advfilter.colour import find_solid_fill_id
+    return find_solid_fill_id(
+        FilteredElementCollector(doc).OfClass(FillPatternElement))
+
+
+def build_overrides(plan):
+    """DB.OverrideGraphicSettings from colour.override_plan output."""
+    from Autodesk.Revit.DB import OverrideGraphicSettings, Color
+    ogs = OverrideGraphicSettings()
+    for name, value in plan:
+        if isinstance(value, tuple):
+            value = Color(value[0], value[1], value[2])
+        getattr(ogs, name)(value)
+    return ogs
