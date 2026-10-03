@@ -128,9 +128,26 @@ class FakeDomain(object):
 DOMAIN = FakeDomain()
 
 
+class FakeBitmapImage(object):
+    def __init__(self):
+        self.calls = []
+        self.UriSource = None
+        self.CacheOption = None
+
+    def BeginInit(self):
+        self.calls.append("begin")
+
+    def EndInit(self):
+        self.calls.append("end")
+
+    def Freeze(self):
+        self.calls.append("freeze")
+
+
 class FakeWPFWindow(object):
     def __init__(self, xaml_file):
         self.Closed = Evt()
+        self.Icon = "pyrevit-default"  # what WPFWindow.__init__ sets
         self.WindowState = "Normal"
         self.shown = 0
         self.activated = 0
@@ -186,7 +203,8 @@ def load_script(fresh=True):
         Collapsed = "Collapsed"
 
     clr = mod("clr", AddReference=lambda n: None)
-    mod("System", Array=None, AppDomain=types.SimpleNamespace(CurrentDomain=DOMAIN),
+    mod("System", Array=None, Uri=lambda path, kind: ("uri", path, kind),
+        UriKind=types.SimpleNamespace(Absolute="Absolute"), AppDomain=types.SimpleNamespace(CurrentDomain=DOMAIN),
         TimeSpan=types.SimpleNamespace(FromMilliseconds=lambda ms: ms))
     mod("System.Collections")
     mod("System.Collections.Generic", List=list)
@@ -198,6 +216,8 @@ def load_script(fresh=True):
     mod("System.Windows.Media",
         SolidColorBrush=lambda c: ("brush", c),
         Color=types.SimpleNamespace(FromRgb=lambda r, g, b: (r, g, b)))
+    mod("System.Windows.Media.Imaging", BitmapImage=FakeBitmapImage,
+        BitmapCacheOption=types.SimpleNamespace(OnLoad="OnLoad"))
     mod("Autodesk")
     mod("Autodesk.Revit", DB=types.SimpleNamespace(),
         UI=types.SimpleNamespace(IExternalEventHandler=object,

@@ -270,3 +270,11 @@ Live-only (verify in #7):
 - Active view only follows real view switches including sheets and schedules, and returns to a tree when going back to a plan.
 - Level list rendering after a rebuild on view switch; cost of rebuilding a large tree on each switch.
 
+
+## #26 Window icon matches icon.png
+
+Script-level (`tests/test_script_icon.py`; harness gained fake `BitmapImage`, `Uri`, `UriKind`, `BitmapCacheOption`, and the fake `WPFWindow` sets a default `Icon` in its constructor like pyRevit does): the window Icon is a frozen `BitmapImage` built from `get_bundle_file("icon.png")` (absolute Uri, `OnLoad`, BeginInit/EndInit then Freeze) and replaces the default; a failing path lookup or bitmap load leaves the default icon and the window still constructs.
+
+pyRevit check: `WPFWindow.__init__` calls `setup_icon()` (pyrevit_settings.png) once; nothing resets it later, so setting `self.Icon` right after `WPFWindow.__init__` wins.
+
+Live-only: title-bar and taskbar icon visually match the ribbon button (96x96 scaled by Windows).
