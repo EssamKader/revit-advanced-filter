@@ -85,6 +85,12 @@ class FilterWindow(forms.WPFWindow):
         self._timer.Stop()
         self._apply_search()
 
+    def _flush_search(self):
+        """Apply a pending debounced search now so self._visible is current."""
+        if self._timer.IsEnabled:
+            self._timer.Stop()
+            self._apply_search()
+
     def search_clear_click(self, sender, args):
         self._timer.Stop()
         self.search_box.Text = ""
@@ -144,6 +150,7 @@ class FilterWindow(forms.WPFWindow):
     def _on_click(self, sender, args):
         # Click fires after WPF flipped IsChecked; ignore it and decide from
         # the core state so an indeterminate box always becomes "all checked".
+        self._flush_search()
         node = sender.Tag
         # While a search is active only visible leaves change (US-5); the
         # box itself keeps showing the full node.state so it never misleads.
@@ -151,6 +158,27 @@ class FilterWindow(forms.WPFWindow):
                          self._visible)
         self._refresh_boxes()
         self._update_status()
+
+    def select_all_click(self, sender, args):
+        self._set_all(True)
+
+    def clear_click(self, sender, args):
+        self._set_all(False)
+
+    def _set_all(self, value):
+        self._flush_search()
+        # Under an active search only visible leaves change (US-5).
+        core.set_all(self._roots, value, self._visible)
+        self._refresh_boxes()
+        self._update_status()
+
+    def expand_all_click(self, sender, args):
+        for item in self._items.values():
+            item.IsExpanded = True
+
+    def collapse_all_click(self, sender, args):
+        for item in self._items.values():
+            item.IsExpanded = False
 
     def _refresh_boxes(self):
         self._busy = True
@@ -172,6 +200,7 @@ class FilterWindow(forms.WPFWindow):
         self.isolate_button.IsEnabled = m > 0
 
     def isolate_click(self, sender, args):
+        self._flush_search()
         checked = core.checked_element_ids(self._roots)
         if not checked:
             forms.alert("Check at least one category, family or type.",

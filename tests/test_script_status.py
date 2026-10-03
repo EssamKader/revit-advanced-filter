@@ -72,6 +72,65 @@ class ScriptStatusTests(unittest.TestCase):
         self.assertEqual(self.w.ids_to_isolate, [1])
         self.assertIsNotNone(self.ns["core"].hidden_notice(*self.w.counts))
 
+    def test_select_all_clear_and_expand_collapse(self):
+        w = self.w
+        w.select_all_click(None, None)
+        self.assertEqual(self.text(), u"4 matched · 1 in active view")
+        self.assertTrue(all(b.IsChecked is True for _, b in w._boxes))
+        w.clear_click(None, None)
+        self.assertEqual(self.text(), "Nothing selected")
+        self.assertFalse(w.isolate_button.IsEnabled)
+        w.expand_all_click(None, None)
+        self.assertTrue(all(i.IsExpanded for i in w._items.values()))
+        w.collapse_all_click(None, None)
+        self.assertFalse(any(i.IsExpanded for i in w._items.values()))
+
+    def test_select_all_under_search_only_visible(self):
+        w = self.w
+        w.search_box.Text = "door"
+        w._on_search_tick(None, None)
+        w.select_all_click(None, None)
+        self.assertEqual(self.text(), u"2 matched · 0 in active view")
+        self.assertIs(self.box("Doors").IsChecked, True)
+        self.assertIs(self.box("Walls").IsChecked, False)
+        w.search_box.Text = "wall"
+        w._on_search_tick(None, None)
+        w.select_all_click(None, None)
+        self.assertEqual(self.text(), u"4 matched · 1 in active view")
+        w.search_box.Text = "door"
+        w._on_search_tick(None, None)
+        w.clear_click(None, None)
+        self.assertEqual(self.text(), u"2 matched · 1 in active view")
+        self.assertIs(self.box("Walls").IsChecked, True)
+        self.assertIs(self.box("Doors").IsChecked, False)
+
+    def test_select_all_flushes_pending_search(self):
+        w = self.w
+        w.search_box.Text = "door"
+        w._on_search_changed(None, None)  # debounce pending, no tick yet
+        self.assertIsNone(w._visible)
+        w.select_all_click(None, None)
+        self.assertFalse(w._timer.running)
+        self.assertIs(self.box("Doors").IsChecked, True)
+        self.assertIs(self.box("Walls").IsChecked, False)
+        self.assertEqual(self.text(), u"2 matched · 0 in active view")
+
+    def test_click_flushes_pending_search(self):
+        w = self.w
+        w.search_box.Text = "generic 200"
+        w._on_search_changed(None, None)
+        w._on_click(self.box("Walls"), None)
+        self.assertIs(self.box("Generic 200").IsChecked, True)
+        self.assertIs(self.box("Generic 300").IsChecked, False)
+
+    def test_expand_all_includes_hidden_items(self):
+        self.w.search_box.Text = "door"
+        self.w._on_search_tick(None, None)
+        self.w.collapse_all_click(None, None)
+        self.assertFalse(any(i.IsExpanded for i in self.w._items.values()))
+        self.w.expand_all_click(None, None)
+        self.assertTrue(all(i.IsExpanded for i in self.w._items.values()))
+
     def _run_main(self, fail, counts):
         ns = self.ns
         calls = []

@@ -44,6 +44,7 @@
             <Grid Grid.Column="2">
                 <Grid.RowDefinitions>
                     <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="Auto"/>
                     <RowDefinition Height="*"/>
                 </Grid.RowDefinitions>
                 <Grid Grid.Row="0" Margin="0,0,0,8">
@@ -60,7 +61,17 @@
                     <Button Grid.Column="1" x:Name="search_clear" Content="&#10005;" Click="search_clear_click"
                             MinWidth="26" Padding="6,4" Margin="4,0,0,0" ToolTip="Clear search"/>
                 </Grid>
-                <TreeView Grid.Row="1" x:Name="tree" Background="#252526" Foreground="#E6E6E6"
+                <StackPanel Grid.Row="1" Orientation="Horizontal" Margin="0,0,0,8">
+                    <Button x:Name="select_all_button" Content="Select all" Click="select_all_click"
+                            Padding="10,3" Margin="0,0,6,0" MinWidth="0"/>
+                    <Button x:Name="clear_button" Content="Clear" Click="clear_click"
+                            Padding="10,3" Margin="0,0,6,0" MinWidth="0"/>
+                    <Button x:Name="expand_all_button" Content="Expand all" Click="expand_all_click"
+                            Padding="10,3" Margin="0,0,6,0" MinWidth="0"/>
+                    <Button x:Name="collapse_all_button" Content="Collapse all" Click="collapse_all_click"
+                            Padding="10,3" Margin="0" MinWidth="0"/>
+                </StackPanel>
+                <TreeView Grid.Row="2" x:Name="tree" Background="#252526" Foreground="#E6E6E6"
                           BorderBrush="#3F3F46" Padding="4"/>
             </Grid>
         </Grid>

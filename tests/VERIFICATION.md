@@ -150,3 +150,20 @@ invariance, counts stored on isolate, and the notify fallback order.
 
 Live-only: toast actually appearing (pyRevit toaster executable under Windows notifications), muted
 foreground rendering, the disabled-button look on the dark style, status text ellipsis at narrow width.
+
+## Issue #5 - Bulk helpers (Select all / Clear / Expand all / Collapse all)
+
+Core: `set_all(roots, value, visible=None)` calls `set_checked` on every root; with `visible` (search
+active) hidden leaves keep their state. `tests/test_core.py::SetAllTests` covers no-search, search-
+restricted select, clear under search keeping hidden checked, and empty roots.
+
+UI: `ui.xaml` has a compact button row (Row 1 of the right-hand grid, between search and tree; tree
+moved to Row 2) with Click handlers `select_all_click`, `clear_click`, `expand_all_click`,
+`collapse_all_click`. Select/Clear call `core.set_all(self._roots, v, self._visible)` then
+`_refresh_boxes()` and `_update_status()`; expand/collapse set `IsExpanded` on every item in
+`self._items` (hidden ones included). `tests/test_script_status.py` checks select/clear status text and
+Isolate state, select/clear under an active search touching only visible nodes (N/M updates), and
+expand/collapse flipping every item.
+
+Live-only: button row look/padding on the dark style, handlers wiring from XAML `Click=` names, real
+TreeView expansion rendering.
