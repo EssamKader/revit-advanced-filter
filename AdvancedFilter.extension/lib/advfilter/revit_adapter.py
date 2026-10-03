@@ -188,6 +188,18 @@ def records_from_elements(elements, get_type, model_category_type,
     return records
 
 
+def in_temporary_isolate(view):
+    """True when the view is in temporary hide/isolate mode."""
+    from Autodesk.Revit.DB import TemporaryViewMode
+    return bool(view.IsInTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate))
+
+
+def disable_temporary_isolate(view):
+    """Leave temporary hide/isolate. Modifies the view: needs a Transaction."""
+    from Autodesk.Revit.DB import TemporaryViewMode
+    view.DisableTemporaryViewMode(TemporaryViewMode.TemporaryHideIsolate)
+
+
 def active_view_ids(doc, view):
     """Set of int element ids visible in view (built once)."""
     from Autodesk.Revit.DB import FilteredElementCollector

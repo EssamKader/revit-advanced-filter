@@ -64,13 +64,12 @@ class ScriptStatusTests(unittest.TestCase):
         self.w._on_search_tick(None, None)
         self.assertEqual(self.text(), before)
 
-    def test_isolate_stores_counts(self):
+    def test_isolate_click_queues_checked_ids_and_stays_open(self):
         self.w._on_click(self.box("Walls"), None)
-        self.w.Close = lambda: None
         self.w.isolate_click(None, None)
-        self.assertEqual(self.w.counts, (2, 1))
-        self.assertEqual(self.w.ids_to_isolate, [1])
-        self.assertIsNotNone(self.ns["core"].hidden_notice(*self.w.counts))
+        reqs = self.w._queue.drain()
+        self.assertEqual([(r.action, r.ids) for r in reqs], [("isolate", [1, 2])])
+        self.assertEqual(self.w.closed_calls, 0)
 
     def test_select_all_clear_and_expand_collapse(self):
         w = self.w
@@ -130,75 +129,6 @@ class ScriptStatusTests(unittest.TestCase):
         self.assertFalse(any(i.IsExpanded for i in self.w._items.values()))
         self.w.expand_all_click(None, None)
         self.assertTrue(all(i.IsExpanded for i in self.w._items.values()))
-
-    def _run_main(self, fail, counts):
-        ns = self.ns
-        calls = []
-
-        class FakeView(object):
-            def IsolateElementsTemporary(self, ids):
-                if fail:
-                    raise RuntimeError("boom")
-
-        class FakeTxn(object):
-            started = False
-
-            def __init__(self, doc, name):
-                pass
-
-            def Start(self):
-                FakeTxn.started = True
-
-            def Commit(self):
-                pass
-
-            def HasStarted(self):
-                return FakeTxn.started
-
-            def RollBack(self):
-                calls.append("rollback")
-
-        class FakeWindow(object):
-            action = "isolate"
-            action_ids = [1]
-
-            def __init__(self, *a):
-                self.counts = counts
-
-            def ShowDialog(self):
-                pass
-
-        class FakeList(list):
-            def Add(self, x):
-                self.append(x)
-
-        view = FakeView()
-        ns["doc"] = types.SimpleNamespace(ActiveView=view)
-        ns["DB"] = types.SimpleNamespace(ElementId=lambda i: i,
-                                         Transaction=FakeTxn)
-        ns["List"] = types.SimpleNamespace(__getitem__=None)
-        ns["List"] = type("L", (), {"__getitem__": lambda self, k: FakeList})()
-        ns["revit_adapter"] = types.SimpleNamespace(
-            view_isolate_problem=lambda v: None,
-            collect_records=lambda d, v: ([1], {}))
-        ns["script"] = types.SimpleNamespace(get_bundle_file=lambda n: n)
-        ns["FilterWindow"] = FakeWindow
-        ns["forms"].alert = lambda *a, **k: calls.append("alert")
-        ns["notify"] = lambda m: calls.append("notify")
-        ns["main"]()
-        return calls
-
-    def test_notice_after_successful_isolate(self):
-        self.assertEqual(self._run_main(False, (3, 1)), ["notify"])
-
-    def test_no_notice_when_all_isolated(self):
-        self.assertEqual(self._run_main(False, (2, 2)), [])
-
-    def test_no_notice_after_failed_isolate(self):
-        calls = self._run_main(True, (3, 1))
-        self.assertNotIn("notify", calls)
-        self.assertIn("rollback", calls)
-        self.assertIn("alert", calls)
 
     def test_notify_fallback_chain(self):
         forms = self.ns["forms"]

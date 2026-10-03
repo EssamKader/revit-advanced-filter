@@ -70,7 +70,10 @@
                     <Button x:Name="expand_all_button" Content="Expand all" Click="expand_all_click"
                             Padding="10,3" Margin="0,0,6,0" MinWidth="0"/>
                     <Button x:Name="collapse_all_button" Content="Collapse all" Click="collapse_all_click"
-                            Padding="10,3" Margin="0" MinWidth="0"/>
+                            Padding="10,3" Margin="0,0,6,0" MinWidth="0"/>
+                    <Button x:Name="refresh_button" Content="Refresh" Click="refresh_click"
+                            Padding="10,3" Margin="0" MinWidth="0"
+                            ToolTip="Re-read the project after model edits or a document change"/>
                 </StackPanel>
                 <TreeView Grid.Row="2" x:Name="tree" Background="#252526" Foreground="#E6E6E6"
                           BorderBrush="#3F3F46" Padding="4"/>
@@ -97,7 +100,7 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button x:Name="isolate_button" Content="Isolate" IsDefault="True"
                         Background="#0E639C" BorderBrush="#0E639C" Click="isolate_click"/>
-                <Button x:Name="cancel_button" Content="Cancel" IsCancel="True" Click="cancel_click"/>
+                <Button x:Name="close_button" Content="Close" IsCancel="True" Click="close_click"/>
             </StackPanel>
         </Grid>
     </Grid>

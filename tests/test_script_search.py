@@ -21,6 +21,14 @@ class Evt(object):
         self.handlers.append(h)
         return self
 
+    def __isub__(self, h):
+        self.handlers.remove(h)
+        return self
+
+    def fire(self, *args):
+        for h in list(self.handlers):
+            h(*args)
+
 
 class FakeCheckBox(object):
     def __init__(self):
@@ -78,8 +86,49 @@ class FakeBlock(object):
     Visibility = "Visible"
 
 
+class FakeExternalEvent(object):
+    """Records Raise; tests call the handler's Execute by hand."""
+    created = []
+
+    def __init__(self, handler):
+        self.handler = handler
+        self.raised = 0
+        self.disposed = False
+
+    @staticmethod
+    def Create(handler):
+        ev = FakeExternalEvent(handler)
+        FakeExternalEvent.created.append(ev)
+        return ev
+
+    def Raise(self):
+        self.raised += 1
+
+    def Dispose(self):
+        self.disposed = True
+
+
+class FakeDomain(object):
+    def __init__(self):
+        self.data = {}
+
+    def GetData(self, key):
+        return self.data.get(key)
+
+    def SetData(self, key, value):
+        self.data[key] = value
+
+
+DOMAIN = FakeDomain()
+
+
 class FakeWPFWindow(object):
     def __init__(self, xaml_file):
+        self.Closed = Evt()
+        self.WindowState = "Normal"
+        self.shown = 0
+        self.activated = 0
+        self.closed_calls = 0
         self.tree = types.SimpleNamespace(Items=FakeItems()) if hasattr(types, "SimpleNamespace") else None
         self.level_list = types.SimpleNamespace(Items=FakeItems())
         self.all_levels = types.SimpleNamespace(
@@ -93,13 +142,30 @@ class FakeWPFWindow(object):
         self.apply_colour_button = types.SimpleNamespace(IsEnabled=True)
         self.reset_colours_button = types.SimpleNamespace(IsEnabled=True)
 
+    def Show(self):
+        self.shown += 1
+
+    def Activate(self):
+        self.activated += 1
+
+    def setup_owner(self):
+        pass
+
+    def Close(self):
+        self.closed_calls += 1
+        self.Closed.fire(self, None)
+
 
 CONFIG = types.SimpleNamespace()
 SAVES = []
 
 
-def load_script():
+def load_script(fresh=True):
+    """Exec script.py against fake modules; fresh=False keeps the AppDomain slot."""
     mods = {}
+    if fresh:
+        DOMAIN.data.clear()
+        del FakeExternalEvent.created[:]
 
     def mod(name, **attrs):
         m = types.ModuleType(name)
@@ -112,10 +178,12 @@ def load_script():
         Collapsed = "Collapsed"
 
     clr = mod("clr", AddReference=lambda n: None)
-    mod("System", Array=None, TimeSpan=types.SimpleNamespace(FromMilliseconds=lambda ms: ms))
+    mod("System", Array=None, AppDomain=types.SimpleNamespace(CurrentDomain=DOMAIN),
+        TimeSpan=types.SimpleNamespace(FromMilliseconds=lambda ms: ms))
     mod("System.Collections")
     mod("System.Collections.Generic", List=list)
-    mod("System.Windows", Visibility=Vis)
+    mod("System.Windows", Visibility=Vis,
+        WindowState=types.SimpleNamespace(Minimized="Minimized", Normal="Normal"))
     mod("System.Windows.Threading", DispatcherTimer=FakeTimer)
     mod("System.Windows.Controls", CheckBox=FakeCheckBox,
         TreeViewItem=FakeTreeViewItem)
@@ -123,7 +191,9 @@ def load_script():
         SolidColorBrush=lambda c: ("brush", c),
         Color=types.SimpleNamespace(FromRgb=lambda r, g, b: (r, g, b)))
     mod("Autodesk")
-    mod("Autodesk.Revit", DB=types.SimpleNamespace())
+    mod("Autodesk.Revit", DB=types.SimpleNamespace(),
+        UI=types.SimpleNamespace(IExternalEventHandler=object,
+                                 ExternalEvent=FakeExternalEvent))
     mod("pyrevit", forms=types.SimpleNamespace(
         WPFWindow=FakeWPFWindow, alert=lambda *a, **k: None),
         script=types.SimpleNamespace(
@@ -131,7 +201,8 @@ def load_script():
     saved = dict((k, sys.modules.get(k)) for k in mods)
     sys.modules.update(mods)
     try:
-        ns = {"__revit__": types.SimpleNamespace(ActiveUIDocument=None),
+        ns = {"__revit__": types.SimpleNamespace(ActiveUIDocument=None,
+                                                 ViewActivated=Evt()),
               "__name__": "script_under_test"}
         with open(SCRIPT, "rb") as f:
             exec(compile(f.read(), SCRIPT, "exec"), ns)
