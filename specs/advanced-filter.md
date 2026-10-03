@@ -131,6 +131,25 @@ Decisions (user, 2026-10-03):
   - **Errors:** exceptions roll back the transaction and show an alert, consistent with US-7.
   - **Isolate unchanged:** Isolate behaves exactly as before. Colour and Isolate are separate actions.
 
+### US-11 — Modeless window that stays open
+As a BIM engineer, I want the Advanced Filter window to stay open after Isolate, Apply colour or Reset colours, while I can still navigate the model, so that I can try other categories, families or types without reopening it.
+
+Decisions (user, 2026-10-03): **modeless window + ExternalEvent**; **always stays open**, with no auto-close option.
+
+- **Acceptance:**
+  - **Persistent engine:** `script.py` sets `__persistentengine__ = True`. The window opens with `.Show()`, not modal, so Revit stays usable: pan, orbit, select and switch views.
+  - **Single instance:** clicking the button while the window is open brings the existing window to the front instead of opening a second one.
+  - **ExternalEvent:** all model changes go through one `IExternalEventHandler` and its `ExternalEvent`:
+    - Isolate, Apply colour, Reset colours (US-7, US-10)
+    - each runs in its own Transaction with rollback and an alert, as today
+  - **Re-read on every action:** the handler re-reads `uidoc.ActiveView` and runs the view guard (US-1); an unsupported view shows an alert and changes nothing. It also rebuilds the active-view id set, so M always matches the view actually acted on.
+  - **Live M:** the dialog subscribes to `UIApplication.ViewActivated` while open and unsubscribes on close. It recomputes the view id set and the N/M status (US-6) when the user switches views.
+  - **Refresh button:** re-collects the project records for the current active document, for after model edits. It keeps the selected levels, the search text and the checked leaf paths (US-3/4/9).
+  - **Document guard:** if the active document is no longer the one the window was built from, actions show "The active document changed — click Refresh" and do nothing. Refresh rebinds to the active document.
+  - **After each action:** the window stays open. The status line shows a short result ("Isolated 12 elements" / "Coloured 12 elements" / "Reset 12 elements"), and the N > M notice still appears.
+  - **Buttons:** Cancel becomes **Close**, the only way to close besides the window ✕. Closing unsubscribes events and releases the single-instance slot.
+  - **Testing:** the pure parts (action dispatch, result text, document-guard decision) are mock-tested. The ExternalEvent and modeless behaviour are live-only and verified in #7.
+
 ## Out of scope
 - Parameter-value filters
 - Linked models
