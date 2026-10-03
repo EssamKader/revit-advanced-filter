@@ -36,7 +36,32 @@ class Node(object):
         self.parent = parent
         self.children = []
         self.element_ids = []  # populated on type nodes only
-        self.checked = False
+        self._checked = False  # meaningful on type nodes (leaves) only
+
+    @property
+    def state(self):
+        """True (all leaves checked), False (none) or None (mixed).
+
+        Type nodes are the source of truth; category/family states are
+        always derived from their children, never stored.
+        """
+        if self.level == LEVEL_TYPE:
+            return self._checked
+        states = set(child.state for child in self.children)
+        if states == set([True]):
+            return True
+        if not states or states == set([False]):
+            return False
+        return None
+
+    @property
+    def checked(self):
+        """True only when fully checked (indeterminate counts as False)."""
+        return self.state is True
+
+    @checked.setter
+    def checked(self, value):
+        set_checked(self, value)
 
     @property
     def count(self):
@@ -111,21 +136,37 @@ def iter_element_ids(node):
                 yield element_id
 
 
-def checked_element_ids(nodes):
-    """Union of element ids under every checked node, de-duplicated.
+def set_checked(node, value):
+    """Check/uncheck a node and every descendant.
 
-    A checked node means "everything under it", so a checked parent covers
-    all its descendants regardless of their own flag. Order is stable.
+    Ancestor states need no update: they are derived from the leaves.
+    An indeterminate node clicked by the user should be passed True
+    (see click_target).
     """
+    if node.level == LEVEL_TYPE:
+        node._checked = bool(value)
+    else:
+        for child in node.children:
+            set_checked(child, value)
+
+
+def click_target(node):
+    """Value a user click should apply: indeterminate or unchecked -> True."""
+    return node.state is not True
+
+
+def checked_element_ids(nodes):
+    """Element ids of every fully-checked leaf, de-duplicated, stable order."""
     seen = set()
     result = []
 
     def visit(node):
-        if node.checked:
-            for element_id in iter_element_ids(node):
-                if element_id not in seen:
-                    seen.add(element_id)
-                    result.append(element_id)
+        if node.level == LEVEL_TYPE:
+            if node._checked:
+                for element_id in node.element_ids:
+                    if element_id not in seen:
+                        seen.add(element_id)
+                        result.append(element_id)
         else:
             for child in node.children:
                 visit(child)
@@ -179,14 +220,21 @@ def _node_path(node):
 
 
 def checked_paths(roots):
-    """Set of name-path tuples of every checked node."""
+    """Set of name-path tuples of every checked leaf (type node).
+
+    Only leaf paths are remembered; category/family states are derived.
+    Consequence: a category checked while only L1 was shown has its L2-only
+    types come in unchecked when L2 appears, and shows as indeterminate.
+    """
     result = set()
 
     def visit(node):
-        if node.checked:
-            result.add(_node_path(node))
-        for child in node.children:
-            visit(child)
+        if node.level == LEVEL_TYPE:
+            if node._checked:
+                result.add(_node_path(node))
+        else:
+            for child in node.children:
+                visit(child)
 
     for root in roots:
         visit(root)
@@ -213,12 +261,17 @@ def merge_checked_paths(previous, roots):
 
 
 def apply_checked_paths(roots, paths):
-    """Check nodes whose path is in paths; others are left untouched."""
+    """Check leaves whose path is in paths; others are left untouched.
+
+    Non-leaf paths in paths are ignored (leaf-only rule).
+    """
     def visit(node):
-        if _node_path(node) in paths:
-            node.checked = True
-        for child in node.children:
-            visit(child)
+        if node.level == LEVEL_TYPE:
+            if _node_path(node) in paths:
+                node._checked = True
+        else:
+            for child in node.children:
+                visit(child)
 
     for root in roots:
         visit(root)

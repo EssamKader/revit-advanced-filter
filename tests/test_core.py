@@ -10,7 +10,7 @@ sys.path.insert(0, os.path.join(
 from advfilter.core import (  # noqa: E402
     ElementRecord, build_tree, iter_element_ids, NO_FAMILY, NO_TYPE, NO_LEVEL,
     filter_by_levels, ordered_levels, checked_paths, apply_checked_paths,
-    checked_element_ids, merge_checked_paths)
+    checked_element_ids, merge_checked_paths, set_checked, click_target)
 
 
 def rec(eid, cat, fam, typ, in_view=True):
@@ -262,14 +262,12 @@ class CheckStatePreservationTests(unittest.TestCase):
     def test_paths_roundtrip_across_level_rebuild(self):
         tree = build_tree(LEVEL_RECS)
         walls = [n for n in tree if n.name == "Walls"][0]
-        walls.children[0].checked = True               # family Basic Wall
-        walls.children[0].children[0].checked = True   # type W200
+        walls.children[0].checked = True               # family Basic Wall -> W200
         floors = [n for n in tree if n.name == "Floors"][0]
         floors.checked = True
         saved = checked_paths(tree)
         self.assertEqual(saved, set([
-            ("Walls", "Basic Wall"), ("Walls", "Basic Wall", "W200"),
-            ("Floors",)]))
+            ("Walls", "Basic Wall", "W200"), ("Floors", "Floor", "F150")]))
 
         new_tree = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
         apply_checked_paths(new_tree, saved)
@@ -277,11 +275,11 @@ class CheckStatePreservationTests(unittest.TestCase):
         self.assertEqual(names(new_tree), ["Doors", "Walls"])
         self.assertEqual(sorted(checked_element_ids(new_tree)), [1])
         self.assertEqual(checked_paths(new_tree), set([
-            ("Walls", "Basic Wall"), ("Walls", "Basic Wall", "W200")]))
+            ("Walls", "Basic Wall", "W200")]))
 
     def test_state_restored_when_level_comes_back(self):
         tree = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
-        apply_checked_paths(tree, set([("Walls", "Curtain")]))
+        apply_checked_paths(tree, set([("Walls", "Curtain", "CW")]))
         saved = checked_paths(tree)
         again = build_tree(LEVEL_RECS)
         apply_checked_paths(again, saved)
@@ -296,23 +294,128 @@ class CheckStatePreservationTests(unittest.TestCase):
         hidden = build_tree(filter_by_levels(LEVEL_RECS, ["L2"]))
         apply_checked_paths(hidden, memory)
         memory = merge_checked_paths(memory, hidden)  # Curtain not visible: kept
-        self.assertIn(("Walls", "Curtain"), memory)
+        self.assertIn(("Walls", "Curtain", "CW"), memory)
         back = build_tree(LEVEL_RECS)
         apply_checked_paths(back, memory)
         self.assertEqual(checked_element_ids(back), [3])
 
     def test_unchecking_visible_node_forgets_it(self):
         tree = build_tree(LEVEL_RECS)
-        apply_checked_paths(tree, set([("Walls", "Curtain")]))
-        memory = merge_checked_paths(set([("Walls", "Curtain")]), tree)
-        self.assertEqual(memory, set([("Walls", "Curtain")]))
+        apply_checked_paths(tree, set([("Walls", "Curtain", "CW")]))
+        memory = merge_checked_paths(set([("Walls", "Curtain", "CW")]), tree)
+        self.assertEqual(memory, set([("Walls", "Curtain", "CW")]))
         [n for n in tree if n.name == "Walls"][0].children[1].checked = False
         memory = merge_checked_paths(memory, tree)
         self.assertEqual(memory, set())
 
     def test_empty_selection_tree_has_nothing_to_isolate(self):
         tree = build_tree([])
-        apply_checked_paths(tree, set([("Walls",)]))
+        apply_checked_paths(tree, set([("Walls", "Curtain", "CW")]))
+        self.assertEqual(checked_element_ids(tree), [])
+
+
+class TriStateTests(unittest.TestCase):
+    def setUp(self):
+        self.tree = build_tree([
+            rec(1, "Walls", "Basic Wall", "W200"),
+            rec(2, "Walls", "Basic Wall", "W300"),
+            rec(3, "Walls", "Curtain", "CW"),
+            rec(4, "Doors", "Single", "D1"),
+        ])
+        self.walls = [n for n in self.tree if n.name == "Walls"][0]
+        self.basic = self.walls.children[0]
+        self.w200, self.w300 = self.basic.children
+        self.curtain = self.walls.children[1]
+
+    def test_all_unchecked_by_default(self):
+        self.assertIs(self.walls.state, False)
+        self.assertIs(self.w200.state, False)
+
+    def test_down_propagation_from_category(self):
+        set_checked(self.walls, True)
+        for n in all_nodes([self.walls]):
+            self.assertIs(n.state, True)
+        set_checked(self.walls, False)
+        for n in all_nodes([self.walls]):
+            self.assertIs(n.state, False)
+
+    def test_down_propagation_from_family(self):
+        set_checked(self.basic, True)
+        self.assertIs(self.w200.state, True)
+        self.assertIs(self.w300.state, True)
+        self.assertIs(self.curtain.state, False)
+
+    def test_up_derivation_mixed_is_none(self):
+        set_checked(self.w200, True)
+        self.assertIs(self.basic.state, None)
+        self.assertIs(self.walls.state, None)
+        self.assertIs(self.curtain.state, False)
+
+    def test_up_derivation_all_children_checked(self):
+        set_checked(self.w200, True)
+        set_checked(self.w300, True)
+        self.assertIs(self.basic.state, True)
+        self.assertIs(self.walls.state, None)  # Curtain still unchecked
+        set_checked(self.curtain, True)
+        self.assertIs(self.walls.state, True)
+
+    def test_up_derivation_back_to_none(self):
+        set_checked(self.walls, True)
+        set_checked(self.w300, False)
+        self.assertIs(self.basic.state, None)
+        set_checked(self.w200, False)
+        self.assertIs(self.basic.state, False)
+        self.assertIs(self.walls.state, None)  # Curtain still checked
+
+    def test_click_on_indeterminate_checks_everything(self):
+        set_checked(self.w200, True)
+        self.assertIs(self.walls.state, None)
+        set_checked(self.walls, click_target(self.walls))
+        for n in all_nodes([self.walls]):
+            self.assertIs(n.state, True)
+
+    def test_click_on_checked_unchecks_and_unchecked_checks(self):
+        self.assertTrue(click_target(self.walls))
+        set_checked(self.walls, True)
+        self.assertFalse(click_target(self.walls))
+
+    def test_checked_property_is_fully_checked_only(self):
+        set_checked(self.w200, True)
+        self.assertFalse(self.basic.checked)
+        self.basic.checked = True
+        self.assertTrue(self.w300.checked)
+
+    def test_element_ids_mixed_states(self):
+        set_checked(self.w200, True)
+        set_checked(self.curtain, True)
+        self.assertEqual(checked_element_ids(self.tree), [1, 3])
+
+    def test_element_ids_deduplicated_and_stable(self):
+        tree = build_tree([rec(5, "A", "F", "T"), rec(5, "A", "F", "T"),
+                           rec(1, "A", "F", "U")])
+        set_checked(tree[0], True)
+        self.assertEqual(checked_element_ids(tree), [5, 1])
+
+    def test_leaf_rule_new_leaves_come_in_unchecked(self):
+        l1 = build_tree(filter_by_levels(LEVEL_RECS, ["L1"]))
+        walls = [n for n in l1 if n.name == "Walls"][0]
+        set_checked(walls, True)  # Basic Wall/W200 (1), Curtain/CW (3)
+        memory = merge_checked_paths(set(), l1)
+        both = build_tree(LEVEL_RECS)
+        apply_checked_paths(both, memory)
+        walls2 = [n for n in both if n.name == "Walls"][0]
+        self.assertIs(walls2.state, True)  # all Walls leaves exist on L1
+        # Add a type that only exists on L2 and rebuild.
+        recs = LEVEL_RECS + [lrec(7, "Walls", "Basic Wall", "W400", "L2")]
+        grown = build_tree(recs)
+        apply_checked_paths(grown, memory)
+        walls3 = [n for n in grown if n.name == "Walls"][0]
+        self.assertIs(walls3.state, None)
+        self.assertEqual(sorted(checked_element_ids(grown)), [1, 2, 3])  # W400 (7) unchecked
+
+    def test_parent_paths_in_memory_are_ignored(self):
+        tree = build_tree(LEVEL_RECS)
+        apply_checked_paths(tree, set([("Walls",), ("Walls", "Curtain")]))
         self.assertEqual(checked_element_ids(tree), [])
 
 

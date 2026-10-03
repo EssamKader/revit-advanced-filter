@@ -81,3 +81,21 @@ The `DB.View` check did not remove element 352540: a live probe showed it is a p
 `_NON_PHYSICAL_CATEGORIES = ("OST_Cameras",)` (resolved with getattr in `non_physical_category_ids()`,
 passed by `collect_records`). Mock test: a non-View Cameras element with Model category and bbox is
 excluded, a wall is kept. The View check remains.
+
+## Issue #3 - Tri-state checkbox propagation
+
+Core (`tests/test_core.py::TriStateTests` plus updated `CheckStatePreservationTests`): leaves (type
+nodes) are the only stored check state; `Node.state` derives True / False / None (mixed) for family
+and category nodes. `set_checked` propagates down; `Node.checked` is now "fully checked" and its
+setter calls `set_checked`. `click_target(node)` is True unless the node is fully checked, so an
+indeterminate click checks everything. `checked_element_ids` = ids of checked leaves, de-duplicated,
+stable order. Persistence stores leaf paths only; a category checked while only L1 was shown gets
+its L2-only types unchecked when L2 appears and shows as indeterminate (tested). Parent paths in
+remembered memory are ignored on apply.
+
+UI (`script.py`): not runnable outside Revit. Each CheckBox has `IsThreeState=False`, handles
+`Click` only (never Checked/Unchecked, so no re-entrancy), calls
+`core.set_checked(node, core.click_target(node))`, then `_refresh_boxes` sets every box's
+`IsChecked = node.state` via the node -> CheckBox list built in `_make_item` (reset on rebuild).
+Live-only: WPF renders IsChecked=None as indeterminate with IsThreeState=False, and a click on
+that box fires Click once and ends up fully checked; boxes stay in sync after level rebuilds.
