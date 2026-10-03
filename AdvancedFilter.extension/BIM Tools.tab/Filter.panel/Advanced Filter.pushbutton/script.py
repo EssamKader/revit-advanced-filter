@@ -439,6 +439,10 @@ class FilterWindow(forms.WPFWindow):
         if ids:
             self._post(session.ISOLATE, ids)
 
+    def reset_isolate_click(self, sender, args):
+        self._flush_search()
+        self._post(session.RESET_ISOLATE)
+
     def refresh_click(self, sender, args):
         self._flush_search()
         self.status_text.Text = "Refreshing..."
@@ -481,6 +485,23 @@ class FilterWindow(forms.WPFWindow):
         self._view_unsupported = unsupported
         self._reapply_scope()
 
+    def rebuild_for_view(self, document, view):
+        """Re-read the view's ids; in view scope rebuild levels and tree too."""
+        try:
+            unsupported = revit_adapter.view_isolate_problem(view) is not None
+        except Exception:
+            unsupported = True
+        try:
+            ids = revit_adapter.active_view_ids(document, view)
+        except Exception:
+            ids = set()  # e.g. a view the collector cannot filter
+            unsupported = True
+        self._view_unsupported = unsupported
+        self._scope_ids = set(ids)
+        self.set_view_ids(ids)
+        if self._scope == core.SCOPE_VIEW:
+            self._reapply_scope()  # tree and levels follow the view
+
     def _on_view_activated(self, sender, args):
         """ViewActivated runs in API context; never let an exception escape."""
         try:
@@ -489,21 +510,7 @@ class FilterWindow(forms.WPFWindow):
             document = args.Document
             if doc_key_of(document) != self._doc_key:
                 return
-            view = args.CurrentActiveView
-            try:
-                unsupported = revit_adapter.view_isolate_problem(view) is not None
-            except Exception:
-                unsupported = True
-            try:
-                ids = revit_adapter.active_view_ids(document, view)
-            except Exception:
-                ids = set()  # e.g. a view the collector cannot filter
-                unsupported = True
-            self._view_unsupported = unsupported
-            self._scope_ids = set(ids)
-            self.set_view_ids(ids)
-            if self._scope == core.SCOPE_VIEW:
-                self._reapply_scope()  # tree and levels follow the new view
+            self.rebuild_for_view(document, args.CurrentActiveView)
         except Exception:
             pass
 
@@ -600,6 +607,31 @@ def isolate_fresh(doc, view, int_ids):
         return False, [], view_ids
 
 
+def reset_isolate(doc, view):
+    """Leave temporary hide/isolate in view. True on success, False on error."""
+    txn = DB.Transaction(doc, "Advanced Filter: Reset isolate")
+    try:
+        txn.Start()
+        revit_adapter.disable_temporary_isolate(view)
+        txn.Commit()
+        return True
+    except Exception as ex:
+        if txn.HasStarted():
+            txn.RollBack()
+        forms.alert("Reset isolate failed:\n%s" % ex, title="Advanced Filter")
+        return False
+
+
+def is_temporarily_isolated(view):
+    """False when the view cannot use temporary modes or the check fails."""
+    try:
+        if view is None or revit_adapter.view_isolate_problem(view) is not None:
+            return False
+        return bool(revit_adapter.in_temporary_isolate(view))
+    except Exception:
+        return False
+
+
 def _id_list(int_ids):
     return [DB.ElementId(i) for i in int_ids]
 
@@ -687,6 +719,13 @@ def process_request(uiapp, window, request):
     if message:
         window.show_status(message)
         forms.alert(message, title="Advanced Filter")
+        return
+    if request.action == session.RESET_ISOLATE:
+        if not is_temporarily_isolated(view):
+            window.show_status("View is not temporarily isolated")
+        elif reset_isolate(doc, view):
+            window.rebuild_for_view(doc, view)
+            window.show_status("Isolation reset")
         return
     problem = revit_adapter.view_isolate_problem(view)
     if problem:

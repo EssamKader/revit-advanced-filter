@@ -111,6 +111,8 @@
             <StackPanel Grid.Column="1" Orientation="Horizontal">
                 <Button x:Name="isolate_button" Content="Isolate" IsDefault="True"
                         Background="#0E639C" BorderBrush="#0E639C" Click="isolate_click"/>
+                <Button x:Name="reset_isolate_button" Content="Reset isolate" Click="reset_isolate_click"
+                        ToolTip="Leave temporary hide/isolate in the active view"/>
                 <Button x:Name="close_button" Content="Close" IsCancel="True" Click="close_click"/>
             </StackPanel>
         </Grid>

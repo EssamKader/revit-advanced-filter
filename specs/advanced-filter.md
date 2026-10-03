@@ -172,6 +172,16 @@ Decisions (user, 2026-10-03): **two radio buttons above the Levels list**, **Who
   - **Unsupported view** (sheet, schedule, template; ViewActivated finds the view fails the isolate guard or the collector fails): *Active view only* shows an empty tree and the status "Active view does not support element filtering". *Whole project* is unchanged.
   - **Testing:** pure scope filtering, composition and config codec are unit-tested; the script wiring is mock-tested; the live behaviour is verified in #7.
 
+### US-13 — Reset isolate
+As a BIM engineer, I want to leave temporary hide/isolate from the window, so that I do not need Revit's view-control-bar menu.
+
+- **Acceptance:**
+  - **Button:** "Reset isolate" next to Isolate in the bottom bar, styled like Close, always enabled. It needs no checked elements. The window stays open.
+  - **Request:** goes through the ExternalEvent queue as `session.RESET_ISOLATE` (pending search is flushed first). The handler re-reads the active document and view and runs the document guard.
+  - **Isolated view:** one Transaction "Advanced Filter: Reset isolate" calls `disable_temporary_isolate` (one Ctrl+Z). On an exception it rolls back and alerts. On success it rebuilds the view ids (M) through the same path as ViewActivated (in *Active view only* also the level list and tree) and shows "Isolation reset".
+  - **Not isolated:** nothing changes in the model; the status shows "View is not temporarily isolated". A view that cannot use temporary modes (template, sheet, schedule) or whose check fails counts as not isolated, with no alert.
+  - **Testing:** mock-tested (`tests/test_script_reset_isolate.py`); the live behaviour is verified in #7.
+
 ## Out of scope
 - Parameter-value filters
 - Linked models

@@ -5,6 +5,7 @@ ISOLATE = "isolate"
 COLOUR = "colour"
 RESET = "reset"
 REFRESH = "refresh"
+RESET_ISOLATE = "reset_isolate"
 MODEL_ACTIONS = (ISOLATE, COLOUR, RESET)
 
 DOC_CHANGED_MESSAGE = u"The active document changed — click Refresh"

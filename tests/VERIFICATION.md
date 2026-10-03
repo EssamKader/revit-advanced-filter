@@ -278,3 +278,10 @@ Script-level (`tests/test_script_icon.py`; harness gained fake `BitmapImage`, `U
 pyRevit check: `WPFWindow.__init__` calls `setup_icon()` (pyrevit_settings.png) once; nothing resets it later, so setting `self.Icon` right after `WPFWindow.__init__` wins.
 
 Live-only: title-bar and taskbar icon visually match the ribbon button (96x96 scaled by Windows).
+
+
+## #28 Reset isolate (US-13)
+
+Script-level (`tests/test_script_reset_isolate.py`, mock harness from `test_script_modeless.py`): button queues `session.RESET_ISOLATE`, raises the event and flushes a pending search; reset when isolated runs one Transaction "Advanced Filter: Reset isolate" (no group), commits, then re-reads the view ids and shows "Isolation reset"; M, `_scope_ids` and `in_active_view` follow the new ids; not isolated gives no transaction and "View is not temporarily isolated"; a view with an isolate problem or a failing `in_temporary_isolate` counts as not isolated without an alert; failure rolls back, alerts "Reset isolate failed" and does not rebuild; document guard and missing document stop before any model call; works with nothing checked and keeps checks; view scope rebuilds levels and tree after the reset (same code as ViewActivated, now `FilterWindow.rebuild_for_view`), project scope keeps the tree objects; XAML has the button between Isolate and Close.
+
+Live-only (verify in #7): one click restores the full view; Ctrl+Z restores the isolate; button styling next to Isolate; the Transaction on a view in temporary mode works from the ExternalEvent.
