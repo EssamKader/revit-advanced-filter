@@ -30,7 +30,7 @@ so that I can open the filter in one click.
 As a BIM engineer, I want all model element instances in the project collected and grouped by
 Category → Family → Type, so that I can see the model's whole composition.
 - **Acceptance:**
-  - Uses `FilteredElementCollector(doc).WhereElementIsNotElementType()`, restricted to physical building elements per the 'Geometric only' decision (Model categories only; CAD imports, links, point clouds, view-specific elements, lines and spatial elements Rooms/Areas/Spaces/HVAC Zones excluded).
+  - Uses `FilteredElementCollector(doc).WhereElementIsNotElementType()`, restricted to physical building elements per the 'Geometric only' decision (Model categories only; CAD imports, links, point clouds, view-specific elements, lines and spatial elements Rooms/Areas/Spaces/HVAC Zones excluded). Elements whose `get_BoundingBox(None)` is null or degenerate (largest extent of Max - Min under 1 mm = 1/304.8 ft, e.g. a Railing without generated geometry) have nothing to isolate and are excluded; thin real elements stay.
   - Loadable-family instances group by `Family.Name` → `FamilySymbol.Name`.
   - System families (walls, floors, ducts, pipes …) group by the type's `FamilyName` property → type name.
   - Elements with no type go under the `<No Family>` / `<No Type>` buckets. They are never dropped.
@@ -94,7 +94,8 @@ As a BIM engineer, I want to limit the tree to elements on chosen levels (one, s
     3. `RBS_START_LEVEL_PARAM` (MEP curves)
     4. `FAMILY_LEVEL_PARAM` / `SCHEDULE_LEVEL_PARAM`
     5. `STAIRS_BASE_LEVEL_PARAM`
-    6. otherwise `<No Level>`.
+    6. if the element has a valid `HostId` (e.g. a Railing), steps 1-5 applied to the host element only (depth 1, no host chaining);
+    7. otherwise `<No Level>`.
   - Live check (2026-10-03): walls, floors and columns resolve through `LevelId`, and framing through `INSTANCE_REFERENCE_LEVEL_PARAM`.
   - The dialog has a multi-select level checklist with an **All levels** toggle. Levels are sorted by elevation, with `<No Level>` last. The default is All.
   - Changing the level selection rebuilds the tree and its counts from the matching records only. Check states are preserved for nodes that still exist, by Category/Family/Type path.

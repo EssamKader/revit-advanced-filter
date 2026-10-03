@@ -75,15 +75,28 @@ def _is_view_specific(element):
     return owner is not None and _id_int(owner) != -1
 
 
+# 1 mm in feet: a bounding box smaller than this on every axis is a point.
+_DEGENERATE_TOL = 1.0 / 304.8
+
+
+def is_degenerate_bbox(bb, tol=_DEGENERATE_TOL):
+    """True when the box has no real extent (largest axis below tol, feet)."""
+    extent = max(bb.Max.X - bb.Min.X, bb.Max.Y - bb.Min.Y,
+                 bb.Max.Z - bb.Min.Z)
+    return extent < tol
+
+
 def is_model_element(element, model_category_type, excluded_classes=None,
                      excluded_category_ids=None):
-    """True for top-level physical Model-category elements with a bounding box.
+    """True for top-level physical Model-category elements with a real bounding box.
 
     Checks run cheapest first, get_BoundingBox last. excluded_classes (a
     class or tuple: View, ImportInstance, RevitLinkInstance, PointCloudInstance)
     drops views (category Cameras), CAD imports (own category per .dwg), links
     and point clouds. Model-category non-geometric database elements
     (Materials, Project Information, Sun Path, ...) have no bounding box.
+    A point-like box (all extents under 1 mm, e.g. a Railing without
+    generated geometry) leaves nothing to isolate and is dropped too.
     View-specific elements (e.g. detail lines, category Lines) are dropped
     too. Category ids in excluded_category_ids drop non-physical categories.
     """
@@ -98,7 +111,8 @@ def is_model_element(element, model_category_type, excluded_classes=None,
         return False
     if _is_view_specific(element):
         return False
-    return element.get_BoundingBox(None) is not None
+    bb = element.get_BoundingBox(None)
+    return bb is not None and not is_degenerate_bbox(bb)
 
 
 def type_names(element, get_type, cache=None):
@@ -129,7 +143,8 @@ def _names_of_type(etype):
 class LevelResolver(object):
     """Resolves the level name of an element, caching level id -> (name, elevation).
 
-    Order: Element.LevelId, then each parameter key in param_keys. A
+    Order: Element.LevelId, then each parameter key in param_keys, then the
+    same two steps on the element's HostId host (depth 1, no chaining). A
     parameter counts only if it has ElementId storage, holds a valid id and
     that id resolves to a Level. get_element and param_keys are injected so
     the logic runs against fakes.
@@ -140,6 +155,7 @@ class LevelResolver(object):
         self._param_keys = list(param_keys)
         self._level_class = level_class
         self._cache = {}  # level id int -> (name, elevation) or None
+        self._host_cache = {}  # host id int -> level name or None
         self.elevations = {}  # level name -> elevation
 
     def _is_level(self, obj):
@@ -163,8 +179,7 @@ class LevelResolver(object):
                 self._cache[key] = None
         return self._cache[key]
 
-    def level_name(self, element):
-        """Level name for element, or None (-> <No Level>)."""
+    def _direct_level(self, element):
         name = self._lookup(getattr(element, "LevelId", None))
         if name:
             return name
@@ -176,6 +191,21 @@ class LevelResolver(object):
             if name:
                 return name
         return None
+
+    def level_name(self, element):
+        """Level name for element, or None (-> <No Level>)."""
+        name = self._direct_level(element)
+        if name:
+            return name
+        host_id = getattr(element, "HostId", None)
+        if host_id is None or _id_int(host_id) == -1:
+            return None
+        key = _id_int(host_id)
+        if key not in self._host_cache:
+            host = self._get_element(host_id)
+            self._host_cache[key] = (
+                self._direct_level(host) if host is not None else None)
+        return self._host_cache[key]
 
 
 def level_param_keys():
