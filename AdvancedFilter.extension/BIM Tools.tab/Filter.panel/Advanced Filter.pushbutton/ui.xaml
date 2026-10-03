@@ -41,8 +41,28 @@
                 <ListBox Grid.Row="2" x:Name="level_list" Background="#252526" Foreground="#E6E6E6"
                          BorderBrush="#3F3F46" Padding="2"/>
             </Grid>
-            <TreeView Grid.Column="2" x:Name="tree" Background="#252526" Foreground="#E6E6E6"
-                      BorderBrush="#3F3F46" Padding="4"/>
+            <Grid Grid.Column="2">
+                <Grid.RowDefinitions>
+                    <RowDefinition Height="Auto"/>
+                    <RowDefinition Height="*"/>
+                </Grid.RowDefinitions>
+                <Grid Grid.Row="0" Margin="0,0,0,8">
+                    <Grid.ColumnDefinitions>
+                        <ColumnDefinition Width="*"/>
+                        <ColumnDefinition Width="Auto"/>
+                    </Grid.ColumnDefinitions>
+                    <TextBox Grid.Column="0" x:Name="search_box" Background="#252526" Foreground="#E6E6E6"
+                             CaretBrush="#E6E6E6" BorderBrush="#3F3F46" Padding="6,4"
+                             VerticalContentAlignment="Center"/>
+                    <TextBlock Grid.Column="0" x:Name="search_hint" Text="Search category, family or type&#8230;"
+                               Foreground="#808080" Margin="9,0,0,0" VerticalAlignment="Center"
+                               IsHitTestVisible="False"/>
+                    <Button Grid.Column="1" x:Name="search_clear" Content="&#10005;" Click="search_clear_click"
+                            MinWidth="26" Padding="6,4" Margin="4,0,0,0" ToolTip="Clear search"/>
+                </Grid>
+                <TreeView Grid.Row="1" x:Name="tree" Background="#252526" Foreground="#E6E6E6"
+                          BorderBrush="#3F3F46" Padding="4"/>
+            </Grid>
         </Grid>
         <StackPanel Grid.Row="2" Orientation="Horizontal" HorizontalAlignment="Right" Margin="0,12,0,0">
             <Button x:Name="isolate_button" Content="Isolate" IsDefault="True"

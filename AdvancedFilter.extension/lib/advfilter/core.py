@@ -136,23 +136,80 @@ def iter_element_ids(node):
                 yield element_id
 
 
-def set_checked(node, value):
-    """Check/uncheck a node and every descendant.
+def _leaves(node, visible=None):
+    """Type nodes under node; restricted to the visible set when given."""
+    if node.level == LEVEL_TYPE:
+        if visible is None or node in visible:
+            yield node
+    else:
+        for child in node.children:
+            for leaf in _leaves(child, visible):
+                yield leaf
+
+
+def set_checked(node, value, visible=None):
+    """Check/uncheck a node's leaves.
 
     Ancestor states need no update: they are derived from the leaves.
     An indeterminate node clicked by the user should be passed True
     (see click_target).
+
+    visible: optional set of nodes from search_visibility. While a search
+    is active only leaves in it are changed (US-5: bulk actions act on
+    visible nodes only); hidden leaves keep their state.
     """
-    if node.level == LEVEL_TYPE:
-        node._checked = bool(value)
-    else:
+    for leaf in _leaves(node, visible):
+        leaf._checked = bool(value)
+
+
+def click_target(node, visible=None):
+    """Value a user click should apply: not-all-checked -> True, else False.
+
+    With visible given, the state is evaluated over visible leaves only, so
+    a parent whose visible leaves are all checked unchecks them even if
+    hidden leaves under it are unchecked (the displayed box state is still
+    node.state, over all leaves).
+    """
+    if visible is None:
+        return node.state is not True
+    leaves = list(_leaves(node, visible))
+    return not (leaves and all(leaf._checked for leaf in leaves))
+
+
+def search_visibility(roots, query):
+    """Set of nodes visible for query, or None (all visible) if it is blank.
+
+    Case-insensitive substring match on node.name at any level, query
+    trimmed. Category match -> all descendants visible; family match -> its
+    types and its category; type match -> its family and category.
+    Never touches check state.
+    """
+    text = (query or "").strip().lower()
+    if not text:
+        return None
+    visible = set()
+
+    def show_subtree(node):
+        visible.add(node)
         for child in node.children:
-            set_checked(child, value)
+            show_subtree(child)
 
+    def show_ancestors(node):
+        node = node.parent
+        while node is not None:
+            visible.add(node)
+            node = node.parent
 
-def click_target(node):
-    """Value a user click should apply: indeterminate or unchecked -> True."""
-    return node.state is not True
+    def visit(node):
+        if text in node.name.lower():
+            show_subtree(node)
+            show_ancestors(node)
+        for child in node.children:
+            visit(child)
+
+    for root in roots:
+        visit(root)
+    return visible
 
 
 def checked_element_ids(nodes):
