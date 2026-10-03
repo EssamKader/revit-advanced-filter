@@ -99,3 +99,30 @@ UI (`script.py`): not runnable outside Revit. Each CheckBox has `IsThreeState=Fa
 `IsChecked = node.state` via the node -> CheckBox list built in `_make_item` (reset on rebuild).
 Live-only: WPF renders IsChecked=None as indeterminate with IsThreeState=False, and a click on
 that box fires Click once and ends up fully checked; boxes stay in sync after level rebuilds.
+
+## Issue #4 - Search box filtering the tree
+
+Core (`tests/test_core.py::SearchTests`): `search_visibility(roots, query)` returns a set of visible
+nodes or `None` (blank/whitespace/None query = everything visible). Case-insensitive substring on
+`node.name` at any level, query trimmed. Category match -> whole subtree; family match -> its types
+and its category; type match -> its family and category. No match -> empty set (not None). Search
+never touches check flags (tested incl. hidden checked leaf surviving and clear restoring).
+
+Click rule under search (US-5): `set_checked(node, value, visible=None)` changes only leaves in
+`visible`; `click_target(node, visible=None)` is evaluated over visible leaves (all visible leaves
+checked -> uncheck, otherwise check; no visible leaves -> True, a harmless no-op). Hidden leaves keep
+their state. Parent boxes keep showing the full `node.state` (e.g. indeterminate after a click that
+checked only the visible leaves) so the display never hides checked descendants.
+
+UI (`script.py`, `ui.xaml`): search TextBox with a TextBlock hint overlay (IsHitTestVisible=False,
+collapsed when text is non-empty) and a "✕" clear button. `TextChanged` restarts a 200 ms
+`DispatcherTimer` (WindowsBase); the tick calls `_apply_search`, which sets `Visibility` on the
+existing TreeViewItems through the `_items` node -> item map (no rebuild) and expands visible items
+while a query is active. `_rebuild` ends with `_apply_search`, so level changes keep the search.
+Mock test `tests/test_script_search.py` execs script.py against fake WPF/pyRevit modules (CPython
+only) and checks: debounce restart, hint toggle, hide/expand, clear restores, state preservation,
+click-under-search, level rebuild re-applying the search.
+
+Live-only: dark TextBox/hint rendering, DispatcherTimer actually ticking under IronPython,
+`Collapsed` TreeViewItems not leaving gaps, `IsExpanded` behaviour with large trees, Cyrillic-free
+"…" and "✕" glyphs displaying in Segoe UI.

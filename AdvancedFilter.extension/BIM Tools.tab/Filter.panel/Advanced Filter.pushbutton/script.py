@@ -3,8 +3,12 @@
 import clr
 clr.AddReference("PresentationFramework")
 clr.AddReference("PresentationCore")
+clr.AddReference("WindowsBase")
 
 from System.Collections.Generic import List
+from System import TimeSpan
+from System.Windows import Visibility
+from System.Windows.Threading import DispatcherTimer
 from System.Windows.Controls import CheckBox, TreeViewItem
 from Autodesk.Revit import DB
 from pyrevit import forms, script
@@ -24,6 +28,12 @@ class FilterWindow(forms.WPFWindow):
         self._checked = set()  # remembered check paths, incl. hidden nodes
         self._busy = False
         self._boxes = []  # (node, CheckBox) for every tree node
+        self._items = {}  # node -> TreeViewItem, for search show/hide
+        self._visible = None  # search_visibility result; None = all visible
+        self._timer = DispatcherTimer()
+        self._timer.Interval = TimeSpan.FromMilliseconds(200)
+        self._timer.Tick += self._on_search_tick
+        self.search_box.TextChanged += self._on_search_changed
         self.ids_to_isolate = None
         self._level_boxes = []
         for name in core.ordered_levels(records, elevations):
@@ -53,9 +63,40 @@ class FilterWindow(forms.WPFWindow):
         core.apply_checked_paths(self._roots, self._checked)
         self.tree.Items.Clear()
         self._boxes = []
+        self._items = {}
         for root in self._roots:
             self.tree.Items.Add(self._make_item(root))
         self._refresh_boxes()
+        self._apply_search()
+
+    def _on_search_changed(self, sender, args):
+        self.search_hint.Visibility = (
+            Visibility.Collapsed if self.search_box.Text else Visibility.Visible)
+        # Debounce: restart the timer on every keystroke.
+        self._timer.Stop()
+        self._timer.Start()
+
+    def _on_search_tick(self, sender, args):
+        self._timer.Stop()
+        self._apply_search()
+
+    def search_clear_click(self, sender, args):
+        self._timer.Stop()
+        self.search_box.Text = ""
+        self._apply_search()
+
+    def _apply_search(self):
+        """Show/hide existing TreeViewItems; check states are untouched."""
+        query = self.search_box.Text
+        self._visible = core.search_visibility(self._roots, query)
+        for node, item in self._items.items():
+            if self._visible is None:
+                item.Visibility = Visibility.Visible
+            else:
+                shown = node in self._visible
+                item.Visibility = Visibility.Visible if shown else Visibility.Collapsed
+                if shown:
+                    item.IsExpanded = True
 
     def _on_level_toggle(self, sender, args):
         if self._busy:
@@ -89,6 +130,7 @@ class FilterWindow(forms.WPFWindow):
         self._boxes.append((node, box))
         item = TreeViewItem()
         item.Header = box
+        self._items[node] = item
         if node.level != core.LEVEL_TYPE:
             for child in node.children:
                 item.Items.Add(self._make_item(child))
@@ -98,7 +140,10 @@ class FilterWindow(forms.WPFWindow):
         # Click fires after WPF flipped IsChecked; ignore it and decide from
         # the core state so an indeterminate box always becomes "all checked".
         node = sender.Tag
-        core.set_checked(node, core.click_target(node))
+        # While a search is active only visible leaves change (US-5); the
+        # box itself keeps showing the full node.state so it never misleads.
+        core.set_checked(node, core.click_target(node, self._visible),
+                         self._visible)
         self._refresh_boxes()
 
     def _refresh_boxes(self):

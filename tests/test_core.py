@@ -10,7 +10,8 @@ sys.path.insert(0, os.path.join(
 from advfilter.core import (  # noqa: E402
     ElementRecord, build_tree, iter_element_ids, NO_FAMILY, NO_TYPE, NO_LEVEL,
     filter_by_levels, ordered_levels, checked_paths, apply_checked_paths,
-    checked_element_ids, merge_checked_paths, set_checked, click_target)
+    checked_element_ids, merge_checked_paths, set_checked, click_target,
+    search_visibility)
 
 
 def rec(eid, cat, fam, typ, in_view=True):
@@ -417,6 +418,113 @@ class TriStateTests(unittest.TestCase):
         tree = build_tree(LEVEL_RECS)
         apply_checked_paths(tree, set([("Walls",), ("Walls", "Curtain")]))
         self.assertEqual(checked_element_ids(tree), [])
+
+
+class SearchTests(unittest.TestCase):
+    def setUp(self):
+        self.tree = build_tree([
+            rec(1, "Walls", "Basic Wall", "Generic 200"),
+            rec(2, "Walls", "Basic Wall", "Generic 300"),
+            rec(3, "Walls", "Curtain Wall", "Storefront"),
+            rec(4, "Doors", "Single Flush", "0915 x 2134"),
+            rec(5, "Doors", "Double", "1830 x 2134"),
+        ])
+        self.doors, self.walls = self.tree
+        self.basic, self.curtain = self.walls.children
+        self.g200, self.g300 = self.basic.children
+        self.store = self.curtain.children[0]
+        self.single, self.double = [
+            f for f in self.doors.children if f.name in ("Single Flush", "Double")]
+
+    def vis(self, query):
+        return search_visibility(self.tree, query)
+
+    def test_empty_and_blank_mean_all_visible(self):
+        self.assertIsNone(self.vis(""))
+        self.assertIsNone(self.vis("   "))
+        self.assertIsNone(self.vis(None))
+
+    def test_category_match_shows_all_descendants(self):
+        v = self.vis("walls")
+        self.assertEqual(v, set(all_nodes([self.walls])))
+        self.assertNotIn(self.doors, v)
+
+    def test_family_match_shows_types_and_category(self):
+        v = self.vis("basic")
+        self.assertEqual(v, set([self.walls, self.basic, self.g200, self.g300]))
+
+    def test_type_match_shows_ancestors_only(self):
+        v = self.vis("storefront")
+        self.assertEqual(v, set([self.walls, self.curtain, self.store]))
+
+    def test_case_insensitive(self):
+        self.assertEqual(self.vis("STOREFRONT"), self.vis("storefront"))
+        self.assertEqual(self.vis("dOORS"), set(all_nodes([self.doors])))
+
+    def test_query_is_trimmed(self):
+        self.assertEqual(self.vis("  storefront 	"), self.vis("storefront"))
+
+    def test_substring_match_in_middle(self):
+        self.assertEqual(self.vis("eneri"),
+                         set([self.walls, self.basic, self.g200, self.g300]))
+
+    def test_multiple_matches_union(self):
+        v = self.vis("2134")
+        self.assertIn(self.single, v)
+        self.assertIn(self.double, v)
+        self.assertNotIn(self.walls, v)
+
+    def test_no_match_gives_empty_set_not_none(self):
+        self.assertEqual(self.vis("zzz"), set())
+
+    def test_search_does_not_change_check_state(self):
+        set_checked(self.g200, True)
+        before = checked_paths(self.tree)
+        self.vis("doors")
+        self.vis("zzz")
+        self.assertEqual(checked_paths(self.tree), before)
+        self.assertIs(self.basic.state, None)
+
+    def test_hidden_checked_leaf_survives_and_clear_restores(self):
+        set_checked(self.g200, True)
+        v = self.vis("storefront")
+        self.assertNotIn(self.g200, v)
+        self.assertEqual(checked_element_ids(self.tree), [1])
+        self.assertIsNone(self.vis(""))
+
+    def test_set_checked_under_search_only_touches_visible_leaves(self):
+        v = self.vis("generic 200")
+        set_checked(self.walls, True, v)
+        self.assertIs(self.g200.state, True)
+        self.assertIs(self.g300.state, False)
+        self.assertIs(self.store.state, False)
+        self.assertIs(self.walls.state, None)  # parent shows full state
+
+    def test_set_checked_uncheck_under_search_keeps_hidden_checks(self):
+        set_checked(self.walls, True)
+        v = self.vis("generic 200")
+        set_checked(self.walls, False, v)
+        self.assertIs(self.g200.state, False)
+        self.assertIs(self.g300.state, True)
+        self.assertIs(self.store.state, True)
+
+    def test_click_target_evaluated_over_visible_leaves(self):
+        v = self.vis("generic 200")
+        self.assertIs(click_target(self.walls, v), True)
+        set_checked(self.walls, True, v)
+        # Visible leaves all checked -> next click unchecks, though the
+        # category itself is only partially checked overall.
+        self.assertIs(self.walls.state, None)
+        self.assertIs(click_target(self.walls, v), False)
+        self.assertIs(click_target(self.walls), True)  # no search: full state
+
+    def test_click_target_no_visible_leaves_is_true(self):
+        self.assertIs(click_target(self.doors, set()), True)
+
+    def test_visible_none_behaves_as_before(self):
+        set_checked(self.walls, True, None)
+        self.assertIs(self.walls.state, True)
+        self.assertIs(click_target(self.walls, None), False)
 
 
 if __name__ == "__main__":
