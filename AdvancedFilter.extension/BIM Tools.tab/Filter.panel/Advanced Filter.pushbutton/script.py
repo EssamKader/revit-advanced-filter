@@ -23,6 +23,7 @@ class FilterWindow(forms.WPFWindow):
         self._roots = []
         self._checked = set()  # remembered check paths, incl. hidden nodes
         self._busy = False
+        self._boxes = []  # (node, CheckBox) for every tree node
         self.ids_to_isolate = None
         self._level_boxes = []
         for name in core.ordered_levels(records, elevations):
@@ -51,8 +52,10 @@ class FilterWindow(forms.WPFWindow):
         self._roots = core.build_tree(records)
         core.apply_checked_paths(self._roots, self._checked)
         self.tree.Items.Clear()
+        self._boxes = []
         for root in self._roots:
             self.tree.Items.Add(self._make_item(root))
+        self._refresh_boxes()
 
     def _on_level_toggle(self, sender, args):
         if self._busy:
@@ -79,9 +82,11 @@ class FilterWindow(forms.WPFWindow):
         box = CheckBox()
         box.Content = "%s (%d)" % (node.name, node.count)
         box.Tag = node
-        box.IsChecked = node.checked
-        box.Checked += self._on_toggle
-        box.Unchecked += self._on_toggle
+        # IsThreeState stays False: a click toggles True/False, while
+        # IsChecked = None (set from node.state) still shows indeterminate.
+        box.IsThreeState = False
+        box.Click += self._on_click
+        self._boxes.append((node, box))
         item = TreeViewItem()
         item.Header = box
         if node.level != core.LEVEL_TYPE:
@@ -89,8 +94,20 @@ class FilterWindow(forms.WPFWindow):
                 item.Items.Add(self._make_item(child))
         return item
 
-    def _on_toggle(self, sender, args):
-        sender.Tag.checked = bool(sender.IsChecked)
+    def _on_click(self, sender, args):
+        # Click fires after WPF flipped IsChecked; ignore it and decide from
+        # the core state so an indeterminate box always becomes "all checked".
+        node = sender.Tag
+        core.set_checked(node, core.click_target(node))
+        self._refresh_boxes()
+
+    def _refresh_boxes(self):
+        self._busy = True
+        try:
+            for node, box in self._boxes:
+                box.IsChecked = node.state
+        finally:
+            self._busy = False
 
     def isolate_click(self, sender, args):
         checked = core.checked_element_ids(self._roots)
