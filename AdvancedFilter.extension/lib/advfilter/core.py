@@ -107,3 +107,32 @@ def iter_element_ids(node):
         for child in node.children:
             for element_id in iter_element_ids(child):
                 yield element_id
+
+
+def checked_element_ids(nodes):
+    """Union of element ids under every checked node, de-duplicated.
+
+    A checked node means "everything under it", so a checked parent covers
+    all its descendants regardless of their own flag. Order is stable.
+    """
+    seen = set()
+    result = []
+
+    def visit(node):
+        if node.checked:
+            for element_id in iter_element_ids(node):
+                if element_id not in seen:
+                    seen.add(element_id)
+                    result.append(element_id)
+        else:
+            for child in node.children:
+                visit(child)
+
+    for node in nodes:
+        visit(node)
+    return result
+
+
+def ids_in_view(element_ids, view_id_set):
+    """Keep only the ids present in view_id_set (order preserved)."""
+    return [i for i in element_ids if i in view_id_set]

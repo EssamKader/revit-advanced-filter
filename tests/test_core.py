@@ -145,5 +145,43 @@ class IterElementIdsTests(unittest.TestCase):
             self.assertEqual(len(list(iter_element_ids(node))), node.count)
 
 
+class SelectionTests(unittest.TestCase):
+    def setUp(self):
+        from advfilter.core import checked_element_ids, ids_in_view
+        self.checked_ids = checked_element_ids
+        self.in_view = ids_in_view
+        self.tree = build_tree([
+            rec(1, "Walls", "Basic Wall", "Generic - 200"),
+            rec(2, "Walls", "Basic Wall", "Generic - 300"),
+            rec(3, "Doors", "Single", "0915"),
+            rec(4, "Doors", "Single", "0915"),
+        ])
+
+    def test_nothing_checked(self):
+        self.assertEqual(self.checked_ids(self.tree), [])
+
+    def test_checked_category_covers_all_descendants(self):
+        walls = [n for n in self.tree if n.name == "Walls"][0]
+        walls.checked = True
+        self.assertEqual(sorted(self.checked_ids(self.tree)), [1, 2])
+
+    def test_checked_type_only(self):
+        doors = [n for n in self.tree if n.name == "Doors"][0]
+        doors.children[0].children[0].checked = True
+        self.assertEqual(sorted(self.checked_ids(self.tree)), [3, 4])
+
+    def test_parent_and_child_checked_deduplicated(self):
+        walls = [n for n in self.tree if n.name == "Walls"][0]
+        walls.checked = True
+        walls.children[0].children[0].checked = True
+        ids = self.checked_ids(self.tree)
+        self.assertEqual(sorted(ids), [1, 2])
+        self.assertEqual(len(ids), 2)
+
+    def test_ids_in_view_intersection(self):
+        self.assertEqual(self.in_view([1, 2, 3], set([2, 3, 9])), [2, 3])
+        self.assertEqual(self.in_view([1], set()), [])
+
+
 if __name__ == "__main__":
     unittest.main()
