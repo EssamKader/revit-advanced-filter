@@ -231,27 +231,28 @@ class ScriptColourTests(unittest.TestCase):
         self.assertFalse(w.apply_colour_button.IsEnabled)
         self.assertFalse(w.reset_colours_button.IsEnabled)
 
-    def test_apply_click_stores_action(self):
+    def test_apply_click_queues_request(self):
         w = self.w
         self.script_pick((1, 2, 3))
         self.tick()
         w._on_click(self.box("Walls"), None)
         w.apply_colour_click(None, None)
-        self.assertEqual(w.action, "colour")
-        self.assertEqual(sorted(w.action_ids), [1, 2])
-        self.assertEqual(w.counts, (2, 2))
-        self.assertEqual(w.colour_rgb, (1, 2, 3))
+        (req,) = w._queue.drain()
+        self.assertEqual(req.action, "colour")
+        self.assertEqual(sorted(req.ids), [1, 2])
+        self.assertEqual(req.rgb, (1, 2, 3))
+        self.assertEqual(w.closed_calls, 0)
 
-    def test_reset_click_stores_action(self):
+    def test_reset_click_queues_all_checked_ids(self):
         w = self.w
         w._on_click(self.box("Doors"), None)
         w._on_click(self.box("G200"), None)
         w.reset_colours_click(None, None)
-        self.assertEqual(w.action, "reset")
-        self.assertEqual(w.action_ids, [1])
-        self.assertEqual(w.counts, (2, 1))
+        (req,) = w._queue.drain()
+        self.assertEqual(req.action, "reset")
+        self.assertEqual(sorted(req.ids), [1, 3])  # N includes the id outside the view
 
-    def test_guards_alert_without_closing(self):
+    def test_guards_alert_without_queueing(self):
         w = self.w
         self.script_pick((1, 2, 3))
         self.tick()
@@ -260,15 +261,7 @@ class ScriptColourTests(unittest.TestCase):
         w._on_click(self.box("D1"), None)
         w.reset_colours_click(None, None)  # none in view
         self.assertEqual(len(self.alerts), 3)
-        self.assertIsNone(w.action)
-
-    def test_isolate_unaffected(self):
-        w = self.w
-        w._on_click(self.box("Walls"), None)
-        w.isolate_click(None, None)
-        self.assertEqual(w.action, "isolate")
-        self.assertEqual(sorted(w.ids_to_isolate), [1, 2])
-        self.assertEqual(w.counts, (2, 2))
+        self.assertEqual(len(w._queue), 0)
 
     def _env(self, fill_id="FILL", fail_on=None):
         ns = self.ns
@@ -300,7 +293,7 @@ class ScriptColourTests(unittest.TestCase):
                     raise RuntimeError("boom")
                 log.append(("set", eid, ogs))
 
-        ns["doc"] = object()
+        ns["doc"] = object()  # passed in explicitly; the module has no global doc
         ns["DB"] = types.SimpleNamespace(
             ElementId=lambda i: i, Transaction=Txn,
             OverrideGraphicSettings=lambda: "EMPTY")
@@ -316,7 +309,7 @@ class ScriptColourTests(unittest.TestCase):
 
     def test_apply_commits_each_id(self):
         view, log = self._env()
-        self.assertTrue(self.ns["apply_colour"](view, [1, 2], (1, 2, 3)))
+        self.assertTrue(self.ns["apply_colour"](self.ns["doc"], view, [1, 2], (1, 2, 3)))
         self.assertEqual(log[:2], [("txn", "Advanced Filter: Colour override"), "start"])
         sets = self.sets(log)
         self.assertEqual([e[1] for e in sets], [1, 2])
@@ -325,7 +318,7 @@ class ScriptColourTests(unittest.TestCase):
 
     def test_apply_no_solid_fill_rolls_back(self):
         view, log = self._env(fill_id=None)
-        self.assertFalse(self.ns["apply_colour"](view, [1], (1, 2, 3)))
+        self.assertFalse(self.ns["apply_colour"](self.ns["doc"], view, [1], (1, 2, 3)))
         self.assertIn("rollback", log)
         self.assertNotIn("commit", log)
         self.assertIn(("alert", "No solid fill pattern found in this project."), log)
@@ -333,54 +326,23 @@ class ScriptColourTests(unittest.TestCase):
 
     def test_apply_exception_rolls_back(self):
         view, log = self._env(fail_on=2)
-        self.assertFalse(self.ns["apply_colour"](view, [1, 2], (1, 2, 3)))
+        self.assertFalse(self.ns["apply_colour"](self.ns["doc"], view, [1, 2], (1, 2, 3)))
         self.assertIn("rollback", log)
         self.assertNotIn("commit", log)
         self.assertEqual(log[-1][0], "alert")
 
     def test_reset_flow(self):
         view, log = self._env()
-        self.assertTrue(self.ns["reset_colours"](view, [1, 2]))
+        self.assertTrue(self.ns["reset_colours"](self.ns["doc"], view, [1, 2]))
         self.assertEqual(log[0], ("txn", "Advanced Filter: Reset colours"))
         self.assertEqual(self.sets(log), [("set", 1, "EMPTY"), ("set", 2, "EMPTY")])
         self.assertEqual(log[-1], "commit")
 
     def test_reset_exception_rolls_back(self):
         view, log = self._env(fail_on=1)
-        self.assertFalse(self.ns["reset_colours"](view, [1]))
+        self.assertFalse(self.ns["reset_colours"](self.ns["doc"], view, [1]))
         self.assertIn("rollback", log)
         self.assertNotIn("commit", log)
-
-    def test_main_dispatch(self):
-        for action, counts, expect in (
-                ("colour", (3, 1), ["apply", "notify"]),
-                ("reset", (2, 2), ["reset"]),
-                ("isolate", (3, 1), ["isolate", "notify"]),
-                (None, (3, 1), [])):
-            ns = self.ns
-            calls = []
-
-            class FakeWindow(object):
-                def __init__(self, *a):
-                    self.action = action
-                    self.action_ids = [1]
-                    self.counts = counts
-                    self.colour_rgb = (1, 2, 3)
-
-                def ShowDialog(self):
-                    pass
-            ns["doc"] = types.SimpleNamespace(ActiveView=object())
-            ns["revit_adapter"] = types.SimpleNamespace(
-                view_isolate_problem=lambda v: None,
-                collect_records=lambda d, v: ([1], {}))
-            ns["script"] = types.SimpleNamespace(get_bundle_file=lambda n: n)
-            ns["FilterWindow"] = FakeWindow
-            ns["apply_colour"] = lambda v, i, c: calls.append("apply") or True
-            ns["reset_colours"] = lambda v, i: calls.append("reset") or True
-            ns["isolate"] = lambda v, i: calls.append("isolate") or True
-            ns["notify"] = lambda m: calls.append("notify")
-            ns["main"]()
-            self.assertEqual(calls, expect, action)
 
 
 if __name__ == "__main__":

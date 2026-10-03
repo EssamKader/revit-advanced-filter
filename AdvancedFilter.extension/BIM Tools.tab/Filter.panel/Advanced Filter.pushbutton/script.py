@@ -1,5 +1,7 @@
 # -*- coding: utf-8 -*-
-"""Advanced Filter: collect project -> Category/Family/Type tree -> Isolate."""
+"""Advanced Filter: modeless Category/Family/Type tree -> Isolate / colour."""
+__persistentengine__ = True
+
 import clr
 clr.AddReference("PresentationFramework")
 clr.AddReference("PresentationCore")
@@ -8,17 +10,34 @@ clr.AddReference("WindowsBase")
 from System.Collections.Generic import List
 import System
 from System import TimeSpan
-from System.Windows import Visibility
+from System.Windows import Visibility, WindowState
 from System.Windows.Media import SolidColorBrush, Color
 from System.Windows.Threading import DispatcherTimer
 from System.Windows.Controls import CheckBox, TreeViewItem
-from Autodesk.Revit import DB
+from Autodesk.Revit import DB, UI
 from pyrevit import forms, script
 
-from advfilter import core, colour, revit_adapter
+from advfilter import core, colour, revit_adapter, session
 
-uidoc = __revit__.ActiveUIDocument
-doc = uidoc.Document if uidoc else None
+# One window per Revit session: the persistent engine re-runs this file on
+# every button press, so the slot lives in the AppDomain, not in the module.
+_SLOT_KEY = "AdvancedFilter.window"
+
+
+def get_open_window():
+    return System.AppDomain.CurrentDomain.GetData(_SLOT_KEY)
+
+
+def set_open_window(window):
+    System.AppDomain.CurrentDomain.SetData(_SLOT_KEY, window)
+
+
+def doc_key_of(document):
+    """(PathName, Title) of a document, or None if it cannot be read."""
+    try:
+        return session.doc_key(document.PathName, document.Title)
+    except Exception:
+        return None
 
 
 def pick_colour(initial, custom_colors):
@@ -63,8 +82,11 @@ def save_colour_state(rgb, custom_colors):
 
 
 class FilterWindow(forms.WPFWindow):
-    def __init__(self, xaml_file, records, elevations):
+    def __init__(self, xaml_file, records, elevations, document=None):
         forms.WPFWindow.__init__(self, xaml_file)
+        self._doc = document
+        self._doc_key = doc_key_of(document) if document is not None else None
+        self._closed = False
         self._records = records
         self._view_ids = set(r.element_id for r in records if r.in_active_view)
         self._roots = []
@@ -77,26 +99,40 @@ class FilterWindow(forms.WPFWindow):
         self._timer.Interval = TimeSpan.FromMilliseconds(200)
         self._timer.Tick += self._on_search_tick
         self.search_box.TextChanged += self._on_search_changed
-        self.ids_to_isolate = None
-        self.action = None  # "isolate" / "colour" / "reset" once the window closes
-        self.action_ids = None
         self.colour_rgb, self._custom_colors = load_colour_state()
         self._m = 0
-        self.counts = (0, 0)  # (N, M) captured when Isolate closes the window
         self._fg_brush = SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6))
         self._muted_brush = SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80))
         self._level_boxes = []
-        for name in core.ordered_levels(records, elevations):
-            box = CheckBox()
-            box.Content = name
-            box.IsChecked = True
-            box.Checked += self._on_level_toggle
-            box.Unchecked += self._on_level_toggle
-            self._level_boxes.append(box)
-            self.level_list.Items.Add(box)
+        self._build_levels(core.ordered_levels(records, elevations), None)
         self.all_levels.Checked += self._on_all_toggle
         self.all_levels.Unchecked += self._on_all_toggle
         self._rebuild()
+        # Created here: the button command gives a valid API context.
+        self._queue = session.RequestQueue()
+        self._event = UI.ExternalEvent.Create(RequestHandler(self))
+        self._view_handler = self._on_view_activated
+        __revit__.ViewActivated += self._view_handler
+        self.Closed += self._on_closed
+
+    def _build_levels(self, names, selected):
+        """Fill the level list; selected=None ticks every level."""
+        self._busy = True
+        try:
+            self.level_list.Items.Clear()
+            self._level_boxes = []
+            for name in names:
+                box = CheckBox()
+                box.Content = name
+                box.IsChecked = selected is None or name in selected
+                box.Checked += self._on_level_toggle
+                box.Unchecked += self._on_level_toggle
+                self._level_boxes.append(box)
+                self.level_list.Items.Add(box)
+            self.all_levels.IsChecked = (
+                len(self._selected_levels()) == len(self._level_boxes))
+        finally:
+            self._busy = False
 
     def _selected_levels(self):
         return [b.Content for b in self._level_boxes if b.IsChecked]
@@ -284,52 +320,142 @@ class FilterWindow(forms.WPFWindow):
         if self._choose_colour():
             self._update_colour_buttons()
 
-    def _checked_in_view(self):
-        """Checked ids in the active view, or None after showing an alert."""
+    def _checked_ids(self):
+        """Checked ids to act on, or None after showing an alert."""
         self._flush_search()
         checked = core.checked_element_ids(self._roots)
         if not checked:
             forms.alert("Check at least one category, family or type.",
                         title="Advanced Filter")
             return None
-        in_view = core.ids_in_view(checked, self._view_ids)
-        if not in_view:
+        if not core.ids_in_view(checked, self._view_ids):
             forms.alert("None of the checked elements are in the active view.",
                         title="Advanced Filter")
             return None
-        return in_view
+        return checked
 
-    def _finish(self, action, in_view):
-        self.counts = core.selection_counts(self._roots, self._view_ids)
-        self.action = action
-        self.action_ids = in_view
-        self.Close()
+    def _post(self, action, ids=None, rgb=None):
+        """Queue a request and wake the ExternalEvent handler."""
+        self._queue.put(session.Request(action, ids, rgb))
+        self._event.Raise()
 
     def apply_colour_click(self, sender, args):
+        self._flush_search()
         if self.colour_rgb is None:
             forms.alert("Choose a colour first.", title="Advanced Filter")
             return
-        in_view = self._checked_in_view()
-        if in_view:
-            self._finish("colour", in_view)
+        ids = self._checked_ids()
+        if ids:
+            self._post(session.COLOUR, ids, self.colour_rgb)
 
     def reset_colours_click(self, sender, args):
-        in_view = self._checked_in_view()
-        if in_view:
-            self._finish("reset", in_view)
+        ids = self._checked_ids()
+        if ids:
+            self._post(session.RESET, ids)
 
     def isolate_click(self, sender, args):
-        in_view = self._checked_in_view()
-        if not in_view:
-            return
-        self.ids_to_isolate = in_view
-        self._finish("isolate", in_view)
+        ids = self._checked_ids()
+        if ids:
+            self._post(session.ISOLATE, ids)
 
-    def cancel_click(self, sender, args):
+    def refresh_click(self, sender, args):
+        self._flush_search()
+        self.status_text.Text = "Refreshing..."
+        self.status_text.Foreground = self._muted_brush
+        self._post(session.REFRESH)
+
+    def close_click(self, sender, args):
+        self._flush_search()
         self.Close()
 
+    # Called from RequestHandler.Execute (Revit API context, UI thread).
+    def take_requests(self):
+        return [] if self._closed else self._queue.drain()
 
-def isolate(view, int_ids):
+    def doc_key(self):
+        return self._doc_key
+
+    def show_status(self, text):
+        if self._closed:
+            return
+        self.status_text.Text = text
+        self.status_text.Foreground = self._fg_brush
+
+    def set_view_ids(self, view_ids):
+        """Rebuild M from a fresh active-view id set (only known record ids)."""
+        known = set(r.element_id for r in self._records)
+        self._view_ids = set(view_ids) & known
+        for r in self._records:
+            r.in_active_view = r.element_id in self._view_ids
+        self._update_status()
+
+    def apply_refresh(self, document, records, elevations):
+        """Rebind to document/records; keep levels, search text and checks."""
+        old_all = [b.Content for b in self._level_boxes]
+        old_selected = self._selected_levels()
+        self._doc = document
+        self._doc_key = doc_key_of(document)
+        self._records = records
+        self._view_ids = set(r.element_id for r in records if r.in_active_view)
+        names = core.ordered_levels(records, elevations)
+        self._build_levels(
+            names, session.merge_level_selection(old_selected, old_all, names))
+        self._rebuild()
+
+    def _on_view_activated(self, sender, args):
+        """ViewActivated runs in API context; never let an exception escape."""
+        try:
+            if self._closed:
+                return
+            document = args.Document
+            if doc_key_of(document) != self._doc_key:
+                return
+            try:
+                ids = revit_adapter.active_view_ids(document, args.CurrentActiveView)
+            except Exception:
+                ids = set()  # e.g. a view the collector cannot filter
+            self.set_view_ids(ids)
+        except Exception:
+            pass
+
+    def _on_closed(self, sender, args):
+        self._closed = True
+        self._timer.Stop()
+        try:
+            __revit__.ViewActivated -= self._view_handler
+        except Exception:
+            pass
+        if get_open_window() is self:
+            set_open_window(None)
+        self._queue.drain()
+        try:
+            self._event.Dispose()
+        except Exception:
+            pass
+
+
+class RequestHandler(UI.IExternalEventHandler):
+    """Runs the window's queued requests in a valid Revit API context."""
+
+    def __init__(self, window):
+        self._window = window
+
+    def Execute(self, uiapp):
+        try:
+            for request in self._window.take_requests():
+                try:
+                    process_request(uiapp, self._window, request)
+                except Exception as ex:
+                    forms.alert("Advanced Filter failed:\n%s" % ex,
+                                title="Advanced Filter")
+        except Exception:
+            pass
+
+    def GetName(self):
+        return "Advanced Filter"
+
+
+def isolate(doc, view, int_ids):
     ids = List[DB.ElementId]()
     for i in int_ids:
         ids.Add(DB.ElementId(i))
@@ -346,11 +472,50 @@ def isolate(view, int_ids):
         return False
 
 
+def isolate_fresh(doc, view, int_ids):
+    """Isolate int_ids in a view that may already be temporarily isolated.
+
+    One TransactionGroup (one Ctrl+Z): leave the old isolate, rebuild the view
+    id set, isolate what is in view. Returns (ok, in_view, view_ids); ok with
+    an empty in_view means nothing was in view (group rolled back, no alert).
+    On failure it alerts, rolls back and returns (False, [], view_ids or None).
+    """
+    group = DB.TransactionGroup(doc, "Advanced Filter: Isolate")
+    view_ids = None
+    try:
+        group.Start()
+        if revit_adapter.in_temporary_isolate(view):
+            reset = DB.Transaction(doc, "Advanced Filter: Reset isolate")
+            try:
+                reset.Start()
+                revit_adapter.disable_temporary_isolate(view)
+                reset.Commit()
+            except Exception:
+                if reset.HasStarted():
+                    reset.RollBack()
+                raise
+        view_ids = revit_adapter.active_view_ids(doc, view)
+        in_view = core.ids_in_view(int_ids, view_ids)
+        if not in_view:
+            group.RollBack()
+            return True, [], view_ids
+        if not isolate(doc, view, in_view):  # alerts and rolls back its own txn
+            group.RollBack()
+            return False, [], view_ids
+        group.Assimilate()
+        return True, in_view, view_ids
+    except Exception as ex:
+        if group.HasStarted():
+            group.RollBack()
+        forms.alert("Isolate failed:\n%s" % ex, title="Advanced Filter")
+        return False, [], view_ids
+
+
 def _id_list(int_ids):
     return [DB.ElementId(i) for i in int_ids]
 
 
-def apply_colour(view, int_ids, rgb):
+def apply_colour(doc, view, int_ids, rgb):
     txn = DB.Transaction(doc, "Advanced Filter: Colour override")
     try:
         txn.Start()
@@ -372,7 +537,7 @@ def apply_colour(view, int_ids, rgb):
         return False
 
 
-def reset_colours(view, int_ids):
+def reset_colours(doc, view, int_ids):
     txn = DB.Transaction(doc, "Advanced Filter: Reset colours")
     try:
         txn.Start()
@@ -406,7 +571,78 @@ def notify(message):
     forms.alert(message, title="Advanced Filter", warn_icon=False)
 
 
+def process_request(uiapp, window, request):
+    """Run one queued request against the *current* active document and view."""
+    uidoc = uiapp.ActiveUIDocument
+    if uidoc is None:
+        forms.alert("Open a Revit project first.", title="Advanced Filter")
+        return
+    doc = uidoc.Document
+    view = doc.ActiveView
+    if request.action == session.REFRESH:
+        if view is None:
+            forms.alert("There is no active view.", title="Advanced Filter")
+            return
+        records, elevations = revit_adapter.collect_records(doc, view)
+        if not records:
+            forms.alert("No model elements found in this project.",
+                        title="Advanced Filter")
+            return
+        window.apply_refresh(doc, records, elevations)
+        window.show_status("Refreshed: %d elements" % len(records))
+        return
+
+    message = session.document_guard(window.doc_key(), doc_key_of(doc))
+    if message:
+        window.show_status(message)
+        forms.alert(message, title="Advanced Filter")
+        return
+    problem = revit_adapter.view_isolate_problem(view)
+    if problem:
+        forms.alert(problem, title="Advanced Filter")
+        return
+    if request.action == session.ISOLATE:
+        ok, in_view, view_ids = isolate_fresh(doc, view, request.ids)
+        if view_ids is not None:
+            window.set_view_ids(view_ids)
+        if ok and not in_view:
+            forms.alert("None of the checked elements are in the active view.",
+                        title="Advanced Filter")
+            return
+    else:
+        view_ids = revit_adapter.active_view_ids(doc, view)
+        window.set_view_ids(view_ids)
+        in_view = core.ids_in_view(request.ids, view_ids)
+        if not in_view:
+            forms.alert("None of the checked elements are in the active view.",
+                        title="Advanced Filter")
+            return
+    if request.action == session.COLOUR:
+        ok = apply_colour(doc, view, in_view, request.rgb)
+    elif request.action == session.RESET:
+        ok = reset_colours(doc, view, in_view)
+    elif request.action != session.ISOLATE:
+        return
+    if ok:
+        window.show_status(session.result_text(request.action, len(in_view)))
+        notice = core.hidden_notice(len(request.ids), len(in_view))
+        if notice:
+            notify(notice)
+
+
 def main():
+    existing = get_open_window()
+    if existing is not None:
+        try:
+            if existing.WindowState == WindowState.Minimized:
+                existing.WindowState = WindowState.Normal
+            existing.Activate()
+            return
+        except Exception:
+            set_open_window(None)  # stale reference: open a fresh window
+
+    uidoc = __revit__.ActiveUIDocument
+    doc = uidoc.Document if uidoc else None
     if doc is None:
         forms.alert("Open a Revit project first.", title="Advanced Filter")
         return
@@ -422,19 +658,14 @@ def main():
                     title="Advanced Filter")
         return
 
-    window = FilterWindow(script.get_bundle_file("ui.xaml"), records, elevations)
-    window.ShowDialog()
-    ok = False
-    if window.action == "isolate":
-        ok = isolate(view, window.action_ids)
-    elif window.action == "colour":
-        ok = apply_colour(view, window.action_ids, window.colour_rgb)
-    elif window.action == "reset":
-        ok = reset_colours(view, window.action_ids)
-    if ok:
-        notice = core.hidden_notice(*window.counts)
-        if notice:
-            notify(notice)
+    window = FilterWindow(script.get_bundle_file("ui.xaml"), records,
+                          elevations, doc)
+    set_open_window(window)
+    try:
+        window.setup_owner()  # keep it above the Revit main window
+    except Exception:
+        pass
+    window.Show()
 
 
 main()

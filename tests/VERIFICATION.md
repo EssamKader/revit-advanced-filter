@@ -201,3 +201,38 @@ successful pick and read once at window init. This widens US-10 from "session" t
 (accepted by the user). Config read/write is wrapped in try/except so it never blocks the dialog.
 Parse/format helpers live in colour.py (`format_rgb`, `parse_rgb`, `format_ints`, `parse_ints`).
 Live-only: the real config file round trip and `System.Array[int]` for `CustomColors`.
+
+## Issue #20 - Modeless window with ExternalEvent (US-11)
+
+Pure logic in `lib/advfilter/session.py` (`tests/test_session.py`): `result_text` (singular/plural),
+`doc_key` + `document_guard` (saved path plus title; unsaved docs by title; unreadable doc blocks),
+`merge_level_selection` (old choices kept, new levels selected, removed dropped, new order) and
+`Request`/`RequestQueue` (FIFO, drain empties).
+
+script.py via the fake-module harness (`tests/test_script_modeless.py`; the harness in
+`test_script_search.py` now has a fake `ExternalEvent` that only records `Raise`, a fake `AppDomain`
+data slot, a fake `UIApplication.ViewActivated` event with `+=`/`-=`, and a fake window with
+`Show`/`Activate`/`Closed`/`WindowState`). Tests call `handler.Execute(uiapp)` by hand, as Revit
+would after `Raise`. Covered: actions queue a request and never close the window; the status line
+shows the result text; N>M notice via `notify`; repeated actions; coalesced raises drain every
+request; Isolate/colour/reset still call the same functions with the same Transaction names, on the
+document passed in, with rollback plus alert on failure; any exception inside Execute is caught and
+alerted; document guard (status plus alert, nothing changed); no active document; view guard failure
+changes nothing; the view id set is rebuilt before acting (N=2, M=1 after a view change); nothing in
+the rebuilt view alerts; ViewActivated updates M, ignores another document, gives M=0 when the
+collector fails; Refresh goes through the event (no API call from the click), keeps level choices
+(new level selected, removed gone), search text and checked leaf paths, rebinds the document and then
+passes the guard; Close and the window X unsubscribe `ViewActivated`, clear the slot, dispose the
+event; `main()` single instance (second press activates, minimised window restored, closed window
+reopens, stale window replaced); `__persistentengine__ = True`.
+
+Live-only (verify in #7):
+- `__persistentengine__` keeping the AppDomain slot working across presses; `AppDomain.SetData/GetData` with an IronPython object.
+- `.Show()` leaves Revit usable (pan, orbit, select, switch views); window stays above Revit via `setup_owner()`; Esc and Close button both close.
+- `IExternalEventHandler` subclass in IronPython accepted by `ExternalEvent.Create`; `Raise` leading to `Execute` when Revit is idle; coalesced raises.
+- Real Transactions inside `Execute`; Ctrl+Z undoes one action; the toast and modal alerts from inside `Execute`.
+- `ViewActivated` firing with `args.Document` / `args.CurrentActiveView`, the `+=`/`-=` with the stored bound method, and M updating when switching views (including sheet or schedule views).
+- Re-isolate in an already isolated view: `FilteredElementCollector(doc, view.Id)` is assumed to report only the isolated set, so Isolate runs in one `TransactionGroup` (reset transaction with `DisableTemporaryViewMode`, rebuild view ids, isolate transaction, Assimilate). Confirm one Ctrl+Z undoes it all and that a second Isolate with different ids works.
+- Document guard with two open projects; Refresh after model edits and after switching documents; level list rebuild rendering.
+- WPF rendering of the new Refresh button and the Close button.
+- Colour and Reset do not leave temporary isolate: in a temporarily isolated view they act only on the visible elements (the rebuilt view id set), by design.

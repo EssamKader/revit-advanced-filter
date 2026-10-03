@@ -148,6 +148,12 @@ Decisions (user, 2026-10-03): **modeless window + ExternalEvent**; **always stay
   - **Document guard:** if the active document is no longer the one the window was built from, actions show "The active document changed — click Refresh" and do nothing. Refresh rebinds to the active document.
   - **After each action:** the window stays open. The status line shows a short result ("Isolated 12 elements" / "Coloured 12 elements" / "Reset 12 elements"), and the N > M notice still appears.
   - **Buttons:** Cancel becomes **Close**, the only way to close besides the window ✕. Closing unsubscribes events and releases the single-instance slot.
+  - **Implementation details (#20):**
+    - The single-instance slot is kept in `AppDomain` data (key `AdvancedFilter.window`), because the persistent engine re-runs `script.py` on every press.
+    - Before Isolate rebuilds the view id set, the handler leaves temporary hide/isolate in that view (`DisableTemporaryViewMode`), since a view already in temporary isolate would report only the isolated elements. Colour and Reset do not do this.
+    - Refresh does not run the isolate view guard (it only reads), and it also reports `Refreshed: N elements` in the status line. A document with no model elements keeps the current window state and alerts.
+    - If `ViewActivated` fires for a view the collector cannot filter, M becomes 0 (Isolate and colour buttons disable) until the next view switch.
+    - Pure helpers live in `lib/advfilter/session.py`: `result_text`, `document_guard`, `merge_level_selection`, `Request`/`RequestQueue` (Execute drains the queue, because `ExternalEvent.Raise` coalesces).
   - **Testing:** the pure parts (action dispatch, result text, document-guard decision) are mock-tested. The ExternalEvent and modeless behaviour are live-only and verified in #7.
 
 ## Out of scope
