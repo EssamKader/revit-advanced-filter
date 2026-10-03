@@ -82,6 +82,8 @@ class FakeWPFWindow(object):
             IsChecked=True, Checked=Evt(), Unchecked=Evt())
         self.search_box = FakeTextBox()
         self.search_hint = FakeBlock()
+        self.status_text = types.SimpleNamespace(Text="", Foreground=None)
+        self.isolate_button = types.SimpleNamespace(IsEnabled=True)
 
 
 def load_script():
@@ -105,6 +107,9 @@ def load_script():
     mod("System.Windows.Threading", DispatcherTimer=FakeTimer)
     mod("System.Windows.Controls", CheckBox=FakeCheckBox,
         TreeViewItem=FakeTreeViewItem)
+    mod("System.Windows.Media",
+        SolidColorBrush=lambda c: ("brush", c),
+        Color=types.SimpleNamespace(FromRgb=lambda r, g, b: (r, g, b)))
     mod("Autodesk")
     mod("Autodesk.Revit", DB=types.SimpleNamespace())
     mod("pyrevit", forms=types.SimpleNamespace(

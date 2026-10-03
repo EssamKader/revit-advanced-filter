@@ -8,6 +8,7 @@ clr.AddReference("WindowsBase")
 from System.Collections.Generic import List
 from System import TimeSpan
 from System.Windows import Visibility
+from System.Windows.Media import SolidColorBrush, Color
 from System.Windows.Threading import DispatcherTimer
 from System.Windows.Controls import CheckBox, TreeViewItem
 from Autodesk.Revit import DB
@@ -35,6 +36,9 @@ class FilterWindow(forms.WPFWindow):
         self._timer.Tick += self._on_search_tick
         self.search_box.TextChanged += self._on_search_changed
         self.ids_to_isolate = None
+        self.counts = (0, 0)  # (N, M) captured when Isolate closes the window
+        self._fg_brush = SolidColorBrush(Color.FromRgb(0xE6, 0xE6, 0xE6))
+        self._muted_brush = SolidColorBrush(Color.FromRgb(0x80, 0x80, 0x80))
         self._level_boxes = []
         for name in core.ordered_levels(records, elevations):
             box = CheckBox()
@@ -68,6 +72,7 @@ class FilterWindow(forms.WPFWindow):
             self.tree.Items.Add(self._make_item(root))
         self._refresh_boxes()
         self._apply_search()
+        self._update_status()
 
     def _on_search_changed(self, sender, args):
         self.search_hint.Visibility = (
@@ -145,6 +150,7 @@ class FilterWindow(forms.WPFWindow):
         core.set_checked(node, core.click_target(node, self._visible),
                          self._visible)
         self._refresh_boxes()
+        self._update_status()
 
     def _refresh_boxes(self):
         self._busy = True
@@ -153,6 +159,17 @@ class FilterWindow(forms.WPFWindow):
                 box.IsChecked = node.state
         finally:
             self._busy = False
+
+    def _update_status(self):
+        """Refresh the N/M label and Isolate enabled state (call after any check change)."""
+        n, m = core.selection_counts(self._roots, self._view_ids)
+        if n == 0:
+            self.status_text.Text = "Nothing selected"
+            self.status_text.Foreground = self._muted_brush
+        else:
+            self.status_text.Text = u"%d matched · %d in active view" % (n, m)
+            self.status_text.Foreground = self._fg_brush
+        self.isolate_button.IsEnabled = m > 0
 
     def isolate_click(self, sender, args):
         checked = core.checked_element_ids(self._roots)
@@ -165,6 +182,7 @@ class FilterWindow(forms.WPFWindow):
             forms.alert("None of the checked elements are in the active view.",
                         title="Advanced Filter")
             return
+        self.counts = core.selection_counts(self._roots, self._view_ids)
         self.ids_to_isolate = in_view
         self.Close()
 
@@ -181,10 +199,31 @@ def isolate(view, int_ids):
         txn.Start()
         view.IsolateElementsTemporary(ids)
         txn.Commit()
+        return True
     except Exception as ex:
         if txn.HasStarted():
             txn.RollBack()
         forms.alert("Isolate failed:\n%s" % ex, title="Advanced Filter")
+        return False
+
+
+def notify(message):
+    """Non-blocking notice: toast, else balloon, else plain alert."""
+    toast = getattr(forms, "toast", None)
+    if toast is not None:
+        try:
+            toast(message, title="Advanced Filter")
+            return
+        except Exception:
+            pass
+    balloon = getattr(forms, "show_balloon", None)
+    if balloon is not None:
+        try:
+            balloon("Advanced Filter", message)
+            return
+        except Exception:
+            pass
+    forms.alert(message, title="Advanced Filter", warn_icon=False)
 
 
 def main():
@@ -206,7 +245,10 @@ def main():
     window = FilterWindow(script.get_bundle_file("ui.xaml"), records, elevations)
     window.ShowDialog()
     if window.ids_to_isolate:
-        isolate(view, window.ids_to_isolate)
+        if isolate(view, window.ids_to_isolate):
+            notice = core.hidden_notice(*window.counts)
+            if notice:
+                notify(notice)
 
 
 main()

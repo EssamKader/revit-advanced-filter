@@ -238,6 +238,20 @@ def ids_in_view(element_ids, view_id_set):
     return [i for i in element_ids if i in view_id_set]
 
 
+def selection_counts(roots, view_id_set):
+    """(N, M): distinct checked ids in the tree, and how many are in view."""
+    checked = checked_element_ids(roots)
+    return len(checked), len(ids_in_view(checked, view_id_set))
+
+
+def hidden_notice(n, m):
+    """Post-isolate notice text, or None when everything matched was isolated."""
+    if n <= m:
+        return None
+    return ("%d matched element(s) are not visible in the active view "
+            "and were not isolated." % (n - m))
+
+
 def filter_by_levels(records, level_names):
     """Records whose level is in level_names; None/empty means all levels.
 

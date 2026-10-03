@@ -126,3 +126,27 @@ click-under-search, level rebuild re-applying the search.
 Live-only: dark TextBox/hint rendering, DispatcherTimer actually ticking under IronPython,
 `Collapsed` TreeViewItems not leaving gaps, `IsExpanded` behaviour with large trees, Cyrillic-free
 "…" and "✕" glyphs displaying in Segoe UI.
+
+## Issue #6 - live count, Isolate enable, N>M notice
+
+Core (`core.py`): `selection_counts(roots, view_id_set)` returns `(N, M)` where N is the number of
+distinct ids from `checked_element_ids` (checked leaves of the current, level-filtered tree, search
+ignored) and M is `len(ids_in_view(...))`. `hidden_notice(n, m)` returns None when `n <= m`, else
+"{n-m} matched element(s) are not visible in the active view and were not isolated."
+`tests/test_counts.py` covers: nothing checked, single type, category, all, none in view, duplicate
+ids, level filter, search not changing counts, empty view set, and the notice text/None cases.
+
+UI (`script.py`, `ui.xaml`): bottom bar is a two-column Grid; `status_text` is left, Isolate/Cancel
+right. `FilterWindow._update_status()` sets "N matched · M in active view" (or a muted "Nothing
+selected" when N == 0) and `isolate_button.IsEnabled = M > 0`. It is called at the end of `_rebuild`
+(startup, level changes, All-levels toggle) and after every `_on_click`; #5's Select all / Clear
+should call it too. `isolate_click` keeps its alerts as a safety net and stores `self.counts = (N, M)`
+before closing; `main()` then runs `isolate`, and `core.hidden_notice(*window.counts)` feeds
+`notify()`, which tries `forms.toast`, then `forms.show_balloon("Advanced Filter", msg)`, then
+`forms.alert(..., warn_icon=False)`. The installed pyRevit (`pyrevit/forms/_ipy.py`) provides `toast`.
+`tests/test_script_status.py` (fake-module harness shared with `test_script_search.py`) checks status
+text and button state at startup, after clicks, uncheck, none-in-view, level change, search
+invariance, counts stored on isolate, and the notify fallback order.
+
+Live-only: toast actually appearing (pyRevit toaster executable under Windows notifications), muted
+foreground rendering, the disabled-button look on the dark style, status text ellipsis at narrow width.
