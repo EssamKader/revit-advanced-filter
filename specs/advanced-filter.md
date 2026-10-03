@@ -156,6 +156,22 @@ Decisions (user, 2026-10-03): **modeless window + ExternalEvent**; **always stay
     - Pure helpers live in `lib/advfilter/session.py`: `result_text`, `document_guard`, `merge_level_selection`, `Request`/`RequestQueue` (Execute drains the queue, because `ExternalEvent.Raise` coalesces).
   - **Testing:** the pure parts (action dispatch, result text, document-guard decision) are mock-tested. The ExternalEvent and modeless behaviour are live-only and verified in #7.
 
+### US-12 — Scope toggle
+As a BIM engineer, I want to limit the tree to what is in the active view, so that I only see and pick elements I can actually act on.
+
+Decisions (user, 2026-10-03): **two radio buttons above the Levels list**, **Whole project** (default) and **Active view only**; the **last choice is remembered** (pyRevit script config, key `scope`, like the colour).
+
+- **Acceptance:**
+  - **Whole project:** today's behaviour.
+  - **Active view only:** the tree, counts and Levels list contain only records that are in the active view, so N == M. Pure `core.filter_by_scope(records, scope, view_ids)` runs first, then `filter_by_levels`. The Levels list shows only levels present in the scoped records.
+  - **Toggle:** switching rebuilds the level list and the tree and keeps the search text and the checked leaf paths (US-3/4/9). Levels keep their state by name (`merge_level_selection`); levels new to the list default to selected.
+  - **Persistence:** `parse_scope` returns whole project for anything unknown or unreadable; config errors never block the window.
+  - **ViewActivated (US-11):** in *Active view only*, recompute the view ids and rebuild the level list and tree for the new view. In *Whole project* only M changes.
+  - **Refresh (US-11):** re-applies the scope to the re-collected records.
+  - **Actions (US-11):** Isolate, Apply colour and Reset colours do not rebuild the tree. After a temporary isolate the view reports only the isolated set, so rebuilding would change the tree under the user. The tree keeps the ids it was last built for (open, view switch, Refresh, toggle); M still comes from the fresh pre-isolate ids as before.
+  - **Unsupported view** (sheet, schedule, template; ViewActivated finds the view fails the isolate guard or the collector fails): *Active view only* shows an empty tree and the status "Active view does not support element filtering". *Whole project* is unchanged.
+  - **Testing:** pure scope filtering, composition and config codec are unit-tested; the script wiring is mock-tested; the live behaviour is verified in #7.
+
 ## Out of scope
 - Parameter-value filters
 - Linked models

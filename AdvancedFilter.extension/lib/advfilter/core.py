@@ -261,6 +261,29 @@ def hidden_notice(n, m):
             "and were not isolated." % (n - m))
 
 
+SCOPE_PROJECT = "project"
+SCOPE_VIEW = "view"
+
+
+def parse_scope(text):
+    """SCOPE_VIEW for "view"; SCOPE_PROJECT for anything else (bad config)."""
+    try:
+        return SCOPE_VIEW if str(text).strip().lower() == SCOPE_VIEW else SCOPE_PROJECT
+    except Exception:
+        return SCOPE_PROJECT
+
+
+def filter_by_scope(records, scope, view_ids):
+    """All records in project scope; only those in view_ids in view scope.
+
+    Apply before filter_by_levels, and build the level list from the result.
+    """
+    if scope == SCOPE_VIEW:
+        wanted = set(view_ids)
+        return [r for r in records if r.element_id in wanted]
+    return list(records)
+
+
 def filter_by_levels(records, level_names):
     """Records whose level is in level_names; None/empty means all levels.
 
