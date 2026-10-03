@@ -7,6 +7,7 @@ Autodesk.*, clr, pyrevit or System.
 
 NO_FAMILY = "<No Family>"
 NO_TYPE = "<No Type>"
+NO_LEVEL = "<No Level>"
 
 LEVEL_CATEGORY = "category"
 LEVEL_FAMILY = "family"
@@ -17,12 +18,13 @@ class ElementRecord(object):
     """Plain description of one model element instance."""
 
     def __init__(self, element_id, category, family=None, type_name=None,
-                 in_active_view=False):
+                 in_active_view=False, level=None):
         self.element_id = element_id
         self.category = category
         self.family = family
         self.type_name = type_name
         self.in_active_view = in_active_view
+        self.level = _clean(level, NO_LEVEL)
 
 
 class Node(object):
@@ -136,3 +138,87 @@ def checked_element_ids(nodes):
 def ids_in_view(element_ids, view_id_set):
     """Keep only the ids present in view_id_set (order preserved)."""
     return [i for i in element_ids if i in view_id_set]
+
+
+def filter_by_levels(records, level_names):
+    """Records whose level is in level_names; None/empty means all levels.
+
+    Rebuild the tree from the result with build_tree so counts and nodes
+    reflect only the selected levels (no empty nodes can appear).
+    """
+    if not level_names:
+        return list(records)
+    wanted = set(level_names)
+    return [r for r in records if r.level in wanted]
+
+
+def ordered_levels(records, elevations):
+    """Level names present on records, by elevation, NO_LEVEL last.
+
+    elevations: dict name -> float. Names without an elevation follow the
+    known ones, sorted by name.
+    """
+    present = set(r.level for r in records)
+    named = [n for n in present if n != NO_LEVEL]
+    known = sorted((n for n in named if n in elevations),
+                   key=lambda n: (elevations[n], n.lower(), n))
+    unknown = sorted((n for n in named if n not in elevations),
+                     key=lambda n: (n.lower(), n))
+    result = known + unknown
+    if NO_LEVEL in present:
+        result.append(NO_LEVEL)
+    return result
+
+
+def _node_path(node):
+    names = []
+    while node is not None:
+        names.append(node.name)
+        node = node.parent
+    return tuple(reversed(names))
+
+
+def checked_paths(roots):
+    """Set of name-path tuples of every checked node."""
+    result = set()
+
+    def visit(node):
+        if node.checked:
+            result.add(_node_path(node))
+        for child in node.children:
+            visit(child)
+
+    for root in roots:
+        visit(root)
+    return result
+
+
+def all_paths(roots):
+    """Set of name-path tuples of every node in the tree."""
+    result = set()
+
+    def visit(node):
+        result.add(_node_path(node))
+        for child in node.children:
+            visit(child)
+
+    for root in roots:
+        visit(root)
+    return result
+
+
+def merge_checked_paths(previous, roots):
+    """Remembered checks: hidden paths keep state, visible ones take live state."""
+    return (set(previous) - all_paths(roots)) | checked_paths(roots)
+
+
+def apply_checked_paths(roots, paths):
+    """Check nodes whose path is in paths; others are left untouched."""
+    def visit(node):
+        if _node_path(node) in paths:
+            node.checked = True
+        for child in node.children:
+            visit(child)
+
+    for root in roots:
+        visit(root)
