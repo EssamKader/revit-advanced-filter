@@ -1,0 +1,5 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 96 96" width="96" height="96">
+  <!-- Advanced Filter: a funnel with its rule; what passes comes out of the spout. -->
+  <polygon points="12,14 84,14 55,50 55,80 41,88 41,50" fill="none" stroke="#2F333B" stroke-width="7"/>
+  <line x1="30" y1="30" x2="66" y2="30" stroke="#E07A45" stroke-width="9"/>
+</svg>
